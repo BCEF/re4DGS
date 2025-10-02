@@ -1,0 +1,4 @@
+assets/
+.vscode/launch.json
+*.pyc
+bk/
