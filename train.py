@@ -13,7 +13,8 @@ import os
 import torch
 from random import randint
 from utils.loss_utils import l1_loss, ssim
-from gaussian_renderer import render, network_gui
+from gaussian_renderer import render_bribg as render
+from gaussian_renderer import network_gui
 import sys
 from scene import Scene, GaussianModel
 from utils.general_utils import safe_state, get_expon_lr_func
@@ -39,6 +40,10 @@ try:
     SPARSE_ADAM_AVAILABLE = True
 except:
     SPARSE_ADAM_AVAILABLE = False
+
+#SUMO
+from deformation_tool.transform_gaussian import process_gaussian_ply
+
 
 def training(dataset, hyper,opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
 
@@ -107,6 +112,10 @@ def training(dataset, hyper,opt, pipe, testing_iterations, saving_iterations, ch
             pipe.debug = True
 
         bg = torch.rand((3), device="cuda") if opt.random_background else background
+
+        if dataset.use_background_image and os.path.exists(viewpoint_cam.bg_path):
+            bg=scene.get_background_image(viewpoint_cam)
+
         #SUMO
         gaussians.update_deformed_gaussians(0.0)
         
@@ -142,8 +151,8 @@ def training(dataset, hyper,opt, pipe, testing_iterations, saving_iterations, ch
             Ll1depth = 0
 
         #SUMO
-        tv_loss = gaussians.compute_regulation(hyper.time_smoothness_weight, hyper.l1_time_planes, hyper.plane_tv_weight)
-        loss += tv_loss
+        # tv_loss = gaussians.compute_regulation(hyper.time_smoothness_weight, hyper.l1_time_planes, hyper.plane_tv_weight)
+        # loss += tv_loss
 
         loss.backward()
 
@@ -179,6 +188,9 @@ def training(dataset, hyper,opt, pipe, testing_iterations, saving_iterations, ch
                 if iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and iteration == opt.densify_from_iter):
                     gaussians.reset_opacity()
 
+            #SUMO
+            gaussians.zero_gradients_and_optimizer_states()
+
             # Optimizer step
             if iteration < opt.iterations:
                 gaussians.exposure_optimizer.step()
@@ -195,6 +207,10 @@ def training(dataset, hyper,opt, pipe, testing_iterations, saving_iterations, ch
                 print("\n[ITER {}] Saving Checkpoint".format(iteration))
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
 
+            #SUMO
+            if iteration % 100 == 0:
+                gaussians.verify_canonical_frozen()
+                
 def prepare_output_and_logger(args):    
     if not args.model_path:
         if os.getenv('OAR_JOB_ID'):
@@ -274,9 +290,22 @@ if __name__ == "__main__":
     parser.add_argument('--disable_viewer', action='store_true', default=False)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+
+    #SUMO
+    parser.add_argument("--deformation_graph",type=str,default=None)
+    parser.add_argument("--deformation_transform",type=str,default=None)
+
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     
+    #SUMO
+    os.makedirs(args.model_path,exist_ok=True)
+    init_ply_path=args.init_ply_path
+    deformed_ply_path=os.path.join(args.model_path,"deformed_ply.ply")
+    process_gaussian_ply(init_ply_path,deformed_ply_path,args.deformation_graph,args.deformation_transform)
+
+    args.init_ply_path=deformed_ply_path
+
     print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)

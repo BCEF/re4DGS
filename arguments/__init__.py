@@ -56,6 +56,13 @@ class ModelParams(ParamGroup):
         self.train_test_exp = False
         self.data_device = "cuda"
         self.eval = False
+
+        #SUMO
+        self.use_background_image=True
+        self._background="bg"
+        self.use_init_ply=True
+        self.init_ply_path=""
+
         super().__init__(parser, "Loading Parameters", sentinel)
 
     def extract(self, args):
@@ -97,18 +104,6 @@ class OptimizationParams(ParamGroup):
         self.depth_l1_weight_final = 0.01
         self.random_background = False
         self.optimizer_type = "default"
-
-        # self.opacity_reset_interval = 3000
-        # self.densify_from_iter = 500
-        # self.densify_until_iter = 15_000
-        # self.densify_grad_threshold_coarse = 0.0002
-        # self.densify_grad_threshold_fine_init = 0.0002
-        # self.densify_grad_threshold_after = 0.0002
-        # self.pruning_from_iter = 500
-        # self.pruning_interval = 100
-        # self.opacity_threshold_coarse = 0.005
-        # self.opacity_threshold_fine_init = 0.005
-        # self.opacity_threshold_fine_after = 0.005
 
         #SUMO
         self.deformation_lr_init = 0.000005#0.00016

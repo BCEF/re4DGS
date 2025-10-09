@@ -212,6 +212,7 @@ class GaussianModel:
 
         #SUMO
         self._deformation = self._deformation.to("cuda") 
+        self.canonical_gaussian_point_num=self.get_xyz.shape[0]
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -308,25 +309,6 @@ class GaussianModel:
             l.append('rot_{}'.format(i))
         return l
 
-    # def save_ply(self, path):
-    #     mkdir_p(os.path.dirname(path))
-
-    #     xyz = self._xyz.detach().cpu().numpy()
-    #     normals = np.zeros_like(xyz)
-    #     f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-    #     f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-    #     opacities = self._opacity.detach().cpu().numpy()
-    #     scale = self._scaling.detach().cpu().numpy()
-    #     rotation = self._rotation.detach().cpu().numpy()
-
-    #     dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
-
-    #     elements = np.empty(xyz.shape[0], dtype=dtype_full)
-    #     attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
-    #     elements[:] = list(map(tuple, attributes))
-    #     el = PlyElement.describe(elements, 'vertex')
-    #     PlyData([el]).write(path)
-
     def save_ply(self, path):
         mkdir_p(os.path.dirname(path))
 
@@ -403,6 +385,19 @@ class GaussianModel:
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
 
         self.active_sh_degree = self.max_sh_degree
+
+    #SUMO 完善加载ply时未能初始化的参数
+    def fixup_params(self,cam_infos,spatial_lr_scale : float):
+        self.spatial_lr_scale = spatial_lr_scale
+        self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+        self.exposure_mapping = {cam_info.image_name: idx for idx, cam_info in enumerate(cam_infos)}
+        self.pretrained_exposures = None
+        exposure = torch.eye(3, 4, device="cuda")[None].repeat(len(cam_infos), 1, 1)
+        self._exposure = nn.Parameter(exposure.requires_grad_(True))
+        self.tmp_radii = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
+        self._deformation = self._deformation.to("cuda") 
+        self.canonical_gaussian_point_num=self.get_xyz.shape[0]
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
@@ -534,6 +529,9 @@ class GaussianModel:
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
+        #SUMO
+        self.canonical_gaussian_point_num-=selected_pts_mask.sum()
+
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
@@ -568,6 +566,10 @@ class GaussianModel:
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
+
+         #SUMO
+        self.canonical_gaussian_point_num-=prune_mask.sum()
+
         tmp_radii = self.tmp_radii
         self.tmp_radii = None
 
@@ -577,6 +579,94 @@ class GaussianModel:
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
     
+    #SUMO
+    def zero_gradients_and_optimizer_states(self):
+        """
+        将前self.canonical_gaussian_point_num个点的梯度和优化器状态清零
+        """
+        if self.canonical_gaussian_point_num <= 0:
+            return
+        
+        num = self.canonical_gaussian_point_num
+        
+        for group in self.optimizer.param_groups:
+            # 跳过特殊的参数组
+            if group.get("name", "") == "deformation":
+                continue
+            if group.get("name", "") == "grid":
+                continue
+            
+            param = group['params'][0]
+            
+            # 检查参数是否有足够的元素
+            if param.shape[0] < num:
+                continue
+            
+            with torch.no_grad():
+                # 1. 清零前num个点的梯度
+                if param.grad is not None:
+                    # param.grad[:num] = 0
+                    param.grad[:num].zero_()
+                
+                # 2. 清零前num个点的优化器状态
+                stored_state = self.optimizer.state.get(param, None)
+                if stored_state is not None:
+                    if "exp_avg" in stored_state:
+                        stored_state["exp_avg"][:num] = 0
+                    if "exp_avg_sq" in stored_state:
+                        stored_state["exp_avg_sq"][:num] = 0
+        
+        # WDD
+        # 冻结前n个高斯点的xyz梯度
+        
+        # g = self._xyz.grad
+        # if g is not None and g.shape[0] > 0:
+        #     k = min(self.canonical_gaussian_point_num, g.shape[0])
+        #     g[:k].zero_()  # 1) 把前 n 个位置的梯度置 0，step 时就不会更新
+
+        #     # 2)（强烈建议）清掉对应的 Adam 动量，防止历史动量推动
+        #     st = self.optimizer.state.get(self._xyz, None)
+        #     if st is not None:
+        #         if "exp_avg" in st:        st["exp_avg"][:k] = 0
+        #         if "exp_avg_sq" in st:     st["exp_avg_sq"][:k] = 0
+        #         if "max_exp_avg_sq" in st: st["max_exp_avg_sq"][:k] = 0  # 仅 AMSGrad 时存在
+
+
+    def verify_canonical_frozen(self):
+        """验证前canonical_gaussian_point_num个点是否真的没有被优化"""
+        if self.canonical_gaussian_point_num <= 0:
+            return
+        
+        num = 10
+        
+        if not hasattr(self, '_initial_canonical_params'):
+            # 第一次调用，保存初始值
+            self._initial_canonical_params = {}
+            for group in self.optimizer.param_groups:
+                if group.get("name", "") in ["deformation", "grid"]:
+                    continue
+                param_name = group.get("name", "")
+                param = group['params'][0]
+                if param.shape[0] >= num:
+                    with torch.no_grad():
+                        self._initial_canonical_params[param_name] = param[:num].clone()
+            print(f"Saved initial canonical parameters (first {num} points)")
+            return
+        
+        # 检查是否有变化
+        print(f"\n=== Verifying Canonical Points (first {num}) ===")
+        for group in self.optimizer.param_groups:
+            if group.get("name", "") in ["deformation", "grid"]:
+                continue
+            
+            param_name = group.get("name", "")
+            param = group['params'][0]
+            
+            if param_name in self._initial_canonical_params:
+                with torch.no_grad():
+                    diff = (param[:num] - self._initial_canonical_params[param_name]).abs().max()
+                    print(f"{param_name:15s}: max change = {diff.item():.2e}")
+        
    
 
     def _plane_regulation(self):

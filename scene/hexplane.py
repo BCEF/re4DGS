@@ -142,7 +142,7 @@ class HexPlaneField(nn.Module):
         aabb = torch.tensor([
             xyz_max,
             xyz_min
-        ],dtype=torch.float32)
+        ],device="cuda",dtype=torch.float32)
         self.aabb = nn.Parameter(aabb,requires_grad=False)
         print("Voxel Plane: set aabb=",self.aabb)
 

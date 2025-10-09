@@ -18,6 +18,11 @@ from scene.gaussian_model import GaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
 
+#SUMO
+from PIL import Image
+from utils.general_utils import PILtoTorch
+import torch
+
 class Scene:
 
     gaussians : GaussianModel
@@ -41,7 +46,7 @@ class Scene:
         self.test_cameras = {}
 
         if os.path.exists(os.path.join(args.source_path, "sparse")):
-            scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images, args.depths, args.eval, args.train_test_exp)
+            scene_info = sceneLoadTypeCallbacks["Colmap"](args.source_path, args.images,args.background, args.depths, args.eval, args.train_test_exp)
         elif os.path.exists(os.path.join(args.source_path, "transforms_train.json")):
             print("Found transforms_train.json file, assuming Blender data set!")
             scene_info = sceneLoadTypeCallbacks["Blender"](args.source_path, args.white_background, args.depths, args.eval)
@@ -74,19 +79,40 @@ class Scene:
             print("Loading Test Cameras")
             self.test_cameras[resolution_scale] = cameraList_from_camInfos(scene_info.test_cameras, resolution_scale, args, scene_info.is_nerf_synthetic, True)
 
-        #SUMO
-        xyz_max = scene_info.point_cloud.points.max(axis=0)
-        xyz_min = scene_info.point_cloud.points.min(axis=0)
-        self.gaussians._deformation.deformation_net.set_aabb(xyz_max,xyz_min)
-
         if self.loaded_iter:
             self.gaussians.load_ply(os.path.join(self.model_path,
                                                            "point_cloud",
                                                            "iteration_" + str(self.loaded_iter),
                                                            "point_cloud.ply"), args.train_test_exp)
+        elif args.use_init_ply and os.path.exists(args.init_ply_path):#SUMO
+            self.gaussians.load_ply(args.init_ply_path,args.train_test_exp)
+            self.gaussians.fixup_params(scene_info.train_cameras,self.cameras_extent)
         else:
             self.gaussians.create_from_pcd(scene_info.point_cloud, scene_info.train_cameras, self.cameras_extent)
+        
+        #SUMO 设置HexPlane的边界
+        xyz_max = scene_info.point_cloud.points.max(axis=0)
+        xyz_min = scene_info.point_cloud.points.min(axis=0)
+        self.gaussians._deformation.deformation_net.set_aabb(xyz_max,xyz_min)
+        
+        # #SUMO 读取变形图
+        # if os.path.exists(os.path.join(args.source_path, args.deformer_path)):
+        #     self.deformer_path=os.path.join(args.source_path, args.deformer_path)
+        # else:
+        #     raise FileNotFoundError(f"变形文件{args.deformer_path}不存在！")
+        
+        # if os.path.exists(os.path.join(args.source_path,"deformation_graph.json")):
+        #     self.dg_path=os.path.join(args.source_path,"deformation_graph.json")
+        # else:
+        #     raise FileNotFoundError("source path中deformation_graph.json文件不存在！")
 
+        #SUMO 初始化background字典
+        self.bg_image_dict={}
+
+        #SUMO 读取约束帧属性
+        #TODO
+
+    
     def save(self, iteration):
         point_cloud_path = os.path.join(self.model_path, "point_cloud/iteration_{}".format(iteration))
         self.gaussians.save_ply(os.path.join(point_cloud_path, "point_cloud.ply"))
@@ -103,3 +129,15 @@ class Scene:
 
     def getTestCameras(self, scale=1.0):
         return self.test_cameras[scale]
+    
+    #SUMO
+    def get_background_image(self,viewpoint_cam):
+        bg_path=viewpoint_cam.bg_path
+        if bg_path not in self.bg_image_dict:
+            bg_image = Image.open(bg_path)
+            bg_resized = PILtoTorch(bg_image, viewpoint_cam.resolution).to("cuda")
+
+
+            self.bg_image_dict[bg_path]=bg_resized
+        return self.bg_image_dict[bg_path]
+

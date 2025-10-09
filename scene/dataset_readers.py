@@ -23,7 +23,10 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 
-class CameraInfo(NamedTuple):
+#SUMO
+from dataclasses import dataclass
+@dataclass
+class CameraInfo:
     uid: int
     R: np.array
     T: np.array
@@ -36,6 +39,8 @@ class CameraInfo(NamedTuple):
     width: int
     height: int
     is_test: bool
+    #SUMO
+    bg_path:str=""
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -142,7 +147,7 @@ def storePly(path, xyz, rgb):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
-def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
+def readColmapSceneInfo(path, images, background,depths, eval, train_test_exp, llffhold=8):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
         cameras_intrinsic_file = os.path.join(path, "sparse/0", "cameras.bin")
@@ -195,6 +200,12 @@ def readColmapSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8):
         cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, depths_params=depths_params,
         images_folder=os.path.join(path, reading_dir), 
         depths_folder=os.path.join(path, depths) if depths != "" else "", test_cam_names_list=test_cam_names_list)
+    
+    #SUMO
+    for camera_info in cam_infos_unsorted:
+        bg_reading_dir="bg" if background==None else background
+        camera_info.bg_path=os.path.join(path,bg_reading_dir,camera_info.image_name)
+
     cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
 
     train_cam_infos = [c for c in cam_infos if train_test_exp or not c.is_test]
