@@ -644,9 +644,9 @@ class GaussianModel:
         normals = np.zeros_like(xyz)
         f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
-        opacities = self.deformed_opa.detach().cpu().numpy()
-        scale = self.deformed_scl.detach().cpu().numpy()
-        rotation = self.deformed_rot.detach().cpu().numpy()
+        opacities = self._opacity.detach().cpu().numpy()
+        scale = self._scaling.detach().cpu().numpy()
+        rotation = self._rotation.detach().cpu().numpy()
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
@@ -663,7 +663,7 @@ class GaussianModel:
         # name=viewpoint.image_name
         transforms=DeformationTransforms()
         transforms.load(deformer_path)
-        deformed_points=apply_deformation_to_gaussians2(self.dg,self._xyz.cpu().numpy(),transforms)
+        deformed_points=apply_deformation_to_gaussians2(self.dg,self._xyz.detach().clone().cpu().numpy(),transforms)
         deformed_points=torch.as_tensor(deformed_points).to(self._xyz.device)
         self.deformed_gaussian_xyz[deformer_path]=deformed_points
         
