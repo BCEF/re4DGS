@@ -417,7 +417,7 @@ class DeformationTransforms:
             self.transformations = [np.array(matrix, dtype=np.float32) 
                                   for matrix in data['transformations']]
             
-            print(f"变形变换已从文件加载: {filename}")
+            # print(f"变形变换已从文件加载: {filename}")
             return True
         except Exception as e:
             print(f"加载变换参数时出错: {e}")

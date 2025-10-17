@@ -56,20 +56,20 @@ def load_smplx_vertices_from_npz(npz_path, smplx_model_path, gender='neutral',
 from deformation_tool import generate_deformation_graph
 from deformation_tool import compute_deformation_transforms
 if __name__=="__main__":
-    ref_model="/home/momo/Desktop/tao_data/000000/000000.npz"
-    deformation_graph_path="/home/momo/Desktop/tao_data/"
+    ref_model="/home/momo/Desktop/tao_data_2/000090/000090.npz"
+    deformation_graph_path="/home/momo/Desktop/tao_data_2/"
     vertices,faces=load_smplx_vertices_from_npz(ref_model,"./models")
     dg=generate_deformation_graph(
         vertices=vertices,
         faces=faces,
         node_num=200,
-        radius_coef=5.0,
+        radius_coef=2.1,
         node_nodes_num=8,       # 每个节点的最大连接节点数
         v_nodes_num=12           # 每个顶点的最大连接节点数
     )
     dg.save(os.path.join(deformation_graph_path,"deformation_graph.json"))
 
-    root_folder="/home/momo/Desktop/tao_data/"
+    root_folder="/home/momo/Desktop/tao_data_2/"
     for folder in os.listdir(root_folder):
         vertices_a=vertices.copy()
         npz_path=os.path.join(root_folder,folder,folder+".npz")

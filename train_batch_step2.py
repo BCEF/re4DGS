@@ -229,19 +229,19 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                     # training_report(tb_writer, global_iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
                     
                     # Densification
-                    # if global_iteration < opt.densify_until_iter:
-                    #     # Keep track of max radii in image-space for pruning
-                    #     gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
-                    #     gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
+                    if global_iteration < opt.densify_until_iter:
+                        # Keep track of max radii in image-space for pruning
+                        gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
+                        gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                    #     if global_iteration > opt.densify_from_iter and global_iteration % opt.densification_interval == 0:# and gaussians.get_xyz.shape[0]<360000:
-                    #         size_threshold = 20 if global_iteration > opt.opacity_reset_interval else None
-                    #         gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
-                    #         gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
-                    #         print(f"Gaussian splatting points: {gaussians._xyz.shape[0]}")
+                        if global_iteration > opt.densify_from_iter and global_iteration % opt.densification_interval == 0:# and gaussians.get_xyz.shape[0]<360000:
+                            size_threshold = 20 if global_iteration > opt.opacity_reset_interval else None
+                            gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
+                            gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
+                            print(f"Gaussian splatting points: {gaussians._xyz.shape[0]}")
                         
-                    #     if global_iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and global_iteration == opt.densify_from_iter):
-                    #         gaussians.reset_opacity()
+                        if global_iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and global_iteration == opt.densify_from_iter):
+                            gaussians.reset_opacity()
                     
 
 

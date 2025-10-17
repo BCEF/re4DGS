@@ -390,6 +390,8 @@ class GaussianModel:
 
         self.active_sh_degree = self.max_sh_degree
 
+        self.base_xyz=self._xyz.detach().clone()
+
     #SUMO 完善加载ply时未能初始化的参数
     def fixup_params(self,cam_infos,spatial_lr_scale : float):
         self.spatial_lr_scale = spatial_lr_scale
@@ -596,7 +598,7 @@ class GaussianModel:
         #                                                                             self.get_features,
         #                                                                             time)
         if self.base_xyz is None:
-            temp_xyz=self._xyz
+            temp_xyz=self.compute_deformed_gaussian(deformer_path)
         else:
             temp_xyz=self.get_deformed_gaussians(deformer_path)
         
@@ -633,9 +635,14 @@ class GaussianModel:
             deformed_points=torch.as_tensor(deformed_points).to(self._xyz.device)
             self.deformed_gaussian_xyz[deformer_path]=deformed_points
             
-        # if self.deformed_opa.shape[0]>0:
-        #     self.save_ply_with_xyz(self.deformed_gaussian_xyz[deformer_path],deformer_path.replace("json","ply"))
         return self.deformed_gaussian_xyz[deformer_path]
+    
+    def compute_deformed_gaussian(self,deformer_path):
+        transforms=DeformationTransforms()
+        transforms.load(deformer_path)
+        deformed_points=apply_deformation_to_gaussians2(self.dg,self._xyz.detach().clone().cpu().numpy(),transforms)
+        deformed_points=torch.as_tensor(deformed_points).to(self._xyz.device)
+        return deformed_points
 
     def save_ply_with_xyz(self,xyz,path):
         mkdir_p(os.path.dirname(path))
