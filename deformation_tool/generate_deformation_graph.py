@@ -1,7 +1,7 @@
 import numpy as np
 import time
-from deformation_graph import DeformationGraph
-from fast_marching import FastMarching
+from .deformation_graph import DeformationGraph
+from .fast_marching import FastMarching
 
 def generate_deformation_graph(vertices, faces, 
                                node_num=100, 

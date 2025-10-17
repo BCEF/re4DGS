@@ -2,3 +2,5 @@ assets/
 .vscode/launch.json
 *.pyc
 bk/
+compare.py
+models/

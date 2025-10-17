@@ -41,6 +41,9 @@ class CameraInfo:
     is_test: bool
     #SUMO
     bg_path:str=""
+    deformer_path:str=""
+    kid:int=0
+    timecode: float = 0.0 
 
 class SceneInfo(NamedTuple):
     point_cloud: BasicPointCloud
@@ -320,7 +323,529 @@ def readNerfSyntheticInfo(path, white_background, depths, eval, extension=".png"
                            is_nerf_synthetic=True)
     return scene_info
 
+#SUMO
+def readDeformSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8,colmap_folder=None,tao_camera_path=None,deformer_path=None,bg_img_folder=None,kid=0,timecode=0.0):
+    reading_dir = "images" if images == None else images
+
+    sparse_folder=os.path.join(path, "sparse/0") if colmap_folder is None else colmap_folder
+
+    if os.path.exists(sparse_folder):
+        cameras_extrinsic_file = os.path.join(sparse_folder, "images.bin")
+        cameras_intrinsic_file = os.path.join(sparse_folder, "cameras.bin")
+        cam_extrinsics = read_extrinsics_binary(cameras_extrinsic_file)
+        cam_intrinsics = read_intrinsics_binary(cameras_intrinsic_file)
+
+        depth_params_file = os.path.join(sparse_folder, "depth_params.json")
+        ## if depth_params_file isnt there AND depths file is here -> throw error
+        depths_params = None
+        if depths != "":
+            try:
+                with open(depth_params_file, "r") as f:
+                    depths_params = json.load(f)
+                all_scales = np.array([depths_params[key]["scale"] for key in depths_params])
+                if (all_scales > 0).sum():
+                    med_scale = np.median(all_scales[all_scales > 0])
+                else:
+                    med_scale = 0
+                for key in depths_params:
+                    depths_params[key]["med_scale"] = med_scale
+
+            except FileNotFoundError:
+                print(f"Error: depth_params.json file not found at path '{depth_params_file}'.")
+                sys.exit(1)
+            except Exception as e:
+                print(f"An unexpected error occurred when trying to open depth_params.json file: {e}")
+                sys.exit(1)
+
+        if eval:
+            if "360" in path:
+                llffhold = 8
+            if llffhold:
+                print("------------LLFF HOLD-------------")
+                cam_names = [cam_extrinsics[cam_id].name for cam_id in cam_extrinsics]
+                cam_names = sorted(cam_names)
+                test_cam_names_list = [name for idx, name in enumerate(cam_names) if idx % llffhold == 0]
+            else:
+                with open(os.path.join(sparse_folder, "test.txt"), 'r') as file:
+                    test_cam_names_list = [line.strip() for line in file]
+        else:
+            test_cam_names_list = []
+
+        
+        cam_infos_unsorted = readColmapCameras(
+            cam_extrinsics=cam_extrinsics, cam_intrinsics=cam_intrinsics, depths_params=depths_params,
+            images_folder=os.path.join(path, reading_dir), 
+            depths_folder=os.path.join(path, depths) if depths != "" else "", test_cam_names_list=test_cam_names_list,
+            )
+        
+        ply_path=os.path.join(colmap_folder,"points3D.ply")
+        bin_path=os.path.join(colmap_folder,"points3D.bin")
+        txt_path=os.path.join(colmap_folder,"points3D.txt")
+
+        if not os.path.exists(ply_path):
+            print("Converting point3d.bin to .ply, will happen only the first time you open the scene.")
+            try:
+                xyz, rgb, _ = read_points3D_binary(bin_path)
+            except:
+                xyz, rgb, _ = read_points3D_text(txt_path)
+            storePly(ply_path, xyz, rgb)
+        try:
+            pcd = fetchPly(ply_path)
+        except:
+            pcd = None
+    elif os.path.exists(tao_camera_path):
+        with open(tao_camera_path, 'r') as f:
+            cameras = json.load(f)
+        
+        if eval:
+            if "360" in path:
+                llffhold = 8
+            if llffhold:
+                print("------------LLFF HOLD-------------")
+                cam_names = cameras.get('all_cam_names', list(cameras.keys()))
+                cam_names = sorted(cam_names)
+                test_cam_names_list = [name for idx, name in enumerate(cam_names) if idx % llffhold == 0]
+            else:
+                with open(os.path.join(sparse_folder, "test.txt"), 'r') as file:
+                    test_cam_names_list = [line.strip() for line in file]
+        else:
+            test_cam_names_list = []
+        
+        cam_infos_unsorted = readTaoCameras(
+            cameras=cameras, 
+            images_folder=os.path.join(path, reading_dir), 
+            depths_folder=os.path.join(path, depths) if depths != "" else "", test_cam_names_list=test_cam_names_list,
+            )
+        
+        ply_path=os.path.join(path,"input.ply")
+        if not os.path.exists(ply_path):
+            npz_path="/home/momo/Documents/xwechat_files/wxid_46mm76y10kh221_6c39/msg/file/2025-10/000000.npz"
+            # model_dict = np.load(npz_path)
+        
+            # # 获取最小形状顶点
+            # if 'minimal_shape' in model_dict:
+            #     vertices = model_dict['minimal_shape'].astype(np.float32)
+            # elif 'vertices' in model_dict:
+            #     vertices = model_dict['vertices'].astype(np.float32)
+            # else:
+            #     # 如果没有顶点，创建随机点云
+            #     print("No vertices found in SMPL-X model, using random point cloud")
+            #     num_pts = 10000
+            #     vertices = np.random.random((num_pts, 3)) * 2.0 - 1.0
+            
+            vertices=load_smplx_vertices_from_npz(npz_path,'./models/')
+            
+            # 为顶点分配颜色（皮肤色）
+            num_pts = len(vertices)
+            colors = np.tile([200, 150, 100], (num_pts, 1))  # 皮肤色
+            
+            storePly(ply_path, vertices, colors)
+        try:
+            pcd = fetchPly(ply_path)
+        except:
+            pcd = None
+    
+    #读取变形
+    deformer_path=os.path.join(path,"transforms.json") if deformer_path==None else deformer_path
+    for camera_info in cam_infos_unsorted:
+        bg_reading_dir="bg" if bg_img_folder==None else bg_img_folder
+        camera_info.bg_path=os.path.join(path,bg_reading_dir,camera_info.image_name)
+        camera_info.deformer_path=deformer_path
+        camera_info.kid=kid
+        camera_info.timecode=timecode
+
+    cam_infos = sorted(cam_infos_unsorted.copy(), key = lambda x : x.image_name)
+
+    train_cam_infos = [c for c in cam_infos if train_test_exp or not c.is_test]
+    test_cam_infos = [c for c in cam_infos if c.is_test]
+
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    
+
+    scene_info = SceneInfo(point_cloud=pcd,
+                           train_cameras=train_cam_infos,
+                           test_cameras=test_cam_infos,
+                           nerf_normalization=nerf_normalization,
+                           ply_path=ply_path,
+                           is_nerf_synthetic=False)
+    return scene_info
+
+#SUMO
+def readTaoCameras(cameras, images_folder, depths_folder, test_cam_names_list):
+    cam_infos = []
+    all_camera_names=cameras.get('all_cam_names', list(cameras.keys()))
+    for uid,cam_name in enumerate(all_camera_names):
+        sys.stdout.write('\r')
+        # the exact output you're looking for:
+        sys.stdout.write("Reading camera {}".format(cam_name))
+        sys.stdout.flush()
+        cam_info = cameras[cam_name]
+        K = np.array(cam_info['K'], dtype=np.float32)
+        dist = np.array(cam_info['D'], dtype=np.float32).ravel()
+        R = np.array(cam_info['R'], dtype=np.float32)
+        T = np.array(cam_info['T'], dtype=np.float32).ravel()
+        
+        ###################333
+        height = int(cam_info.get('height', 1024))
+        width = int(cam_info.get('width', 1024))
+        M = np.eye(3)
+        w_ = K[0, 2] - width / 2
+        h_ = K[1, 2] - height / 2
+        M[0, 2] = (w_) / K[0, 0]
+        M[1, 2] = (h_) / K[1, 1]
+        K[0, 2] = width / 2
+        K[1, 2] = height / 2
+        R = M @ R
+        T = M @ T
+        ###################333
+
+        # 转换为 3DGS 需要的格式
+        R = np.transpose(R)  # 3DGS 使用转置的旋转矩阵
+        
+        # 计算视场角
+        height = int(cam_info.get('height', 1024))
+        width = int(cam_info.get('width', 1024))
+        focal_length_x = K[0, 0]
+        focal_length_y = K[1, 1]
+        FovY = focal2fov(focal_length_y, height)
+        FovX = focal2fov(focal_length_x, width)
+
+
+        image_name = cam_name+".jpg"
+        image_path = os.path.join(images_folder, image_name)
+        
+        depth_path = os.path.join(depths_folder, f"{image_name}.png") if depths_folder != "" else ""
+
+        cam_info = CameraInfo(uid=uid, R=R, T=T, FovY=FovY, FovX=FovX, depth_params=None,
+                              image_path=image_path, image_name=image_name, depth_path=depth_path,
+                              width=width, height=height, is_test=image_name in test_cam_names_list)
+        cam_infos.append(cam_info)
+
+    sys.stdout.write('\n')
+    return cam_infos
+
+# def readTaoAvatarSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8, train_views=None, train_frames=None, val_views=None, val_frames=None):
+#     """
+#     读取 TaoAvatar/x_avatar 格式的数据集
+#     数据格式：
+#     path/
+#         ├── cam_params.json
+#         ├── 1/
+#         │   ├── 000000.jpg
+#         │   ├── 000000.png
+#         │   └── ...
+#         ├── 2/
+#         └── models/
+#             ├── 000000.npz
+#             └── ...
+#     """
+#     import cv2
+    
+#     # 读取相机参数
+#     cam_params_file = os.path.join(path, 'cam_params.json')
+#     with open(cam_params_file, 'r') as f:
+#         cameras = json.load(f)
+    
+#     # 读取 SMPL-X 参数文件列表
+#     models_dir = os.path.join(path, 'models')
+#     model_files = sorted([f for f in os.listdir(models_dir) if f.endswith('.npz')])
+    
+#     # 确定训练和测试的相机和帧
+#     all_cam_names = cameras.get('all_cam_names', list(cameras.keys()))
+    
+#     if train_views is None and val_views is None:
+#         # 使用 llffhold 自动分配训练/测试相机
+#         if llffhold > 0:
+#             # 类似 LLFF 的方式：每 llffhold 个相机选一个作为测试
+#             sorted_cam_names = sorted(all_cam_names)
+#             val_views = [name for idx, name in enumerate(sorted_cam_names) if idx % llffhold == 0]
+#             train_views = [name for name in sorted_cam_names if name not in val_views]
+#             print(f"使用 llffhold={llffhold} 自动分配相机:")
+#             print(f"  训练相机 ({len(train_views)}个): {train_views}")
+#             print(f"  测试相机 ({len(val_views)}个): {val_views}")
+#         else:
+#             # llffhold=0: 所有相机都用于训练
+#             train_views = all_cam_names
+#             val_views = []
+#             print(f"llffhold=0: 使用所有 {len(train_views)} 个相机进行训练")
+#     else:
+#         # 手动指定了 train_views 或 val_views
+#         if train_views is None:
+#             train_views = all_cam_names
+#         if val_views is None:
+#             val_views = train_views[:1] if train_views else []
+    
+#     # 帧范围：[start, end, step] 或直接的帧列表
+#     if train_frames is None:
+#         train_frames = [0, len(model_files), 1]
+#     if val_frames is None:
+#         val_frames = [0, len(model_files), 10]
+    
+#     # 解析帧范围或帧列表
+#     if len(train_frames) == 3 and all(isinstance(x, int) for x in train_frames):
+#         # 范围模式: [start, end, step]
+#         start_frame, end_frame, sampling_rate = train_frames
+#         if end_frame == 0:
+#             end_frame = len(model_files)
+#         train_frame_indices = list(range(start_frame, end_frame, sampling_rate))
+#     else:
+#         # 列表模式: 直接使用提供的帧索引
+#         train_frame_indices = train_frames
+#         print(f"使用帧列表模式，训练帧: {train_frame_indices}")
+    
+#     if eval:
+#         # 解析验证帧：支持范围或列表
+#         if len(val_frames) == 3 and all(isinstance(x, int) for x in val_frames):
+#             # 范围模式
+#             val_start, val_end, val_step = val_frames
+#             if val_end == 0:
+#                 val_end = len(model_files)
+#             val_frame_indices = list(range(val_start, val_end, val_step))
+#         else:
+#             # 列表模式
+#             val_frame_indices = val_frames
+#             print(f"使用帧列表模式，验证帧: {val_frame_indices}")
+#         test_cam_names = val_views
+#     else:
+#         val_frame_indices = []
+#         test_cam_names = []
+    
+#     # 构建相机信息列表
+#     cam_infos_unsorted = []
+#     uid = 0
+    
+#     # 训练相机
+#     for cam_name in train_views:
+#         if cam_name not in cameras:
+#             print(f"Warning: Camera {cam_name} not found in cam_params.json")
+#             continue
+            
+#         cam_info = cameras[cam_name]
+#         K = np.array(cam_info['K'], dtype=np.float32)
+#         dist = np.array(cam_info['D'], dtype=np.float32).ravel()
+#         R = np.array(cam_info['R'], dtype=np.float32)
+#         T = np.array(cam_info['T'], dtype=np.float32).ravel()
+        
+#         # 转换为 3DGS 需要的格式
+#         R = np.transpose(R)  # 3DGS 使用转置的旋转矩阵
+        
+#         # 计算视场角
+#         height = int(cam_info.get('height', 1024))
+#         width = int(cam_info.get('width', 1024))
+#         focal_length_x = K[0, 0]
+#         focal_length_y = K[1, 1]
+#         FovY = focal2fov(focal_length_y, height)
+#         FovX = focal2fov(focal_length_x, width)
+        
+#         # 为每一帧创建相机信息
+#         for frame_idx in train_frame_indices:
+#             model_file = model_files[frame_idx]
+#             image_file = os.path.join(path, cam_name, f"{frame_idx:06d}.jpg")
+#             # mask_file = os.path.join(path, cam_name, f"{frame_idx:06d}.png")
+            
+#             if not os.path.exists(image_file):
+#                 continue
+            
+#             image_name = f"{cam_name}_{frame_idx:06d}"
+            
+#             # 获取变形场路径（优先使用环境变量中的路径）
+#             deform_base_path = os.environ.get('DEFORM_PATH', None)
+#             if deform_base_path and os.path.exists(deform_base_path):
+#                 # 使用变形场的 transforms.json
+#                 deformer_path = os.path.join(deform_base_path, f"{frame_idx:06d}", "transforms.json")
+#             else:
+#                 # 回退到 models 目录（向后兼容）
+#                 deformer_path = os.path.join(models_dir, model_file)
+            
+#             # 创建 CameraInfo
+#             cam_infos_unsorted.append(CameraInfo(
+#                 uid=uid,
+#                 R=R,
+#                 T=T,
+#                 FovY=FovY,
+#                 FovX=FovX,
+#                 depth_params=None,
+#                 image_path=image_file,
+#                 image_name=image_name,
+#                 depth_path="",
+#                 width=width,
+#                 height=height,
+#                 is_test=False,
+#                 # TaoAvatar 特有字段
+#                 kid=frame_idx,
+#                 timecode=frame_idx / len(model_files),
+#                 deformer_path=deformer_path,
+#                 bg_path=None  # TaoAvatar 数据集没有背景图
+#             ))
+#             uid += 1
+    
+#     # 测试相机（如果需要）
+#     for cam_name in test_cam_names:
+#         if cam_name not in cameras:
+#             continue
+            
+#         cam_info = cameras[cam_name]
+#         K = np.array(cam_info['K'], dtype=np.float32)
+#         R = np.array(cam_info['R'], dtype=np.float32)
+#         T = np.array(cam_info['T'], dtype=np.float32).ravel()
+#         R = np.transpose(R)
+        
+#         height = int(cam_info.get('height', 1024))
+#         width = int(cam_info.get('width', 1024))
+#         focal_length_x = K[0, 0]
+#         focal_length_y = K[1, 1]
+#         FovY = focal2fov(focal_length_y, height)
+#         FovX = focal2fov(focal_length_x, width)
+        
+#         for frame_idx in val_frame_indices:
+#             model_file = model_files[frame_idx]
+#             image_file = os.path.join(path, cam_name, f"{frame_idx:06d}.jpg")
+#             mask_file = os.path.join(path, cam_name, f"{frame_idx:06d}.png")
+            
+#             if not os.path.exists(image_file):
+#                 continue
+            
+#             image_name = f"{cam_name}_{frame_idx:06d}"
+            
+#             # 获取变形场路径（优先使用环境变量中的路径）
+#             deform_base_path = os.environ.get('DEFORM_PATH', None)
+#             if deform_base_path and os.path.exists(deform_base_path):
+#                 # 使用变形场的 transforms.json
+#                 deformer_path = os.path.join(deform_base_path, f"{frame_idx:06d}", "transforms.json")
+#             else:
+#                 # 回退到 models 目录（向后兼容）
+#                 deformer_path = os.path.join(models_dir, model_file)
+            
+#             cam_infos_unsorted.append(CameraInfo(
+#                 uid=uid,
+#                 R=R,
+#                 T=T,
+#                 FovY=FovY,
+#                 FovX=FovX,
+#                 depth_params=None,
+#                 image_path=image_file,
+#                 image_name=image_name,
+#                 depth_path="",
+#                 width=width,
+#                 height=height,
+#                 is_test=True,
+#                 flame_params=None,
+#                 kid=frame_idx,
+#                 timecode=frame_idx / len(model_files),
+#                 deformer_path=deformer_path,
+#                 bg_path=None  # TaoAvatar 数据集没有背景图
+#             ))
+#             uid += 1
+    
+#     # 排序相机信息
+#     cam_infos = sorted(cam_infos_unsorted.copy(), key=lambda x: x.image_name)
+    
+#     train_cam_infos = [c for c in cam_infos if not c.is_test]
+#     test_cam_infos = [c for c in cam_infos if c.is_test]
+    
+#     # 计算 NeRF 归一化参数
+#     nerf_normalization = getNerfppNorm(train_cam_infos)
+    
+#     # 生成初始点云（从第一个 SMPL-X 模型）
+#     ply_path = os.path.join(path, "points3d.ply")
+#     if not os.path.exists(ply_path) and len(model_files) > 0:
+#         print("Generating point cloud from SMPL-X model...")
+#         model_file_path = os.path.join(models_dir, model_files[0])
+#         # model_dict = np.load(model_file_path)
+        
+#         # # 获取最小形状顶点
+#         # if 'minimal_shape' in model_dict:
+#         #     vertices = model_dict['minimal_shape'].astype(np.float32)
+#         # elif 'vertices' in model_dict:
+#         #     vertices = model_dict['vertices'].astype(np.float32)
+#         # else:
+#         #     # 如果没有顶点，创建随机点云
+#         #     print("No vertices found in SMPL-X model, using random point cloud")
+#         #     num_pts = 10000
+#         #     vertices = np.random.random((num_pts, 3)) * 2.0 - 1.0
+        
+#         vertices=load_smplx_vertices_from_npz(model_file_path,'./models/smplx/')
+        
+#         # 为顶点分配颜色（皮肤色）
+#         num_pts = len(vertices)
+#         colors = np.tile([200, 150, 100], (num_pts, 1))  # 皮肤色
+        
+#         storePly(ply_path, vertices, colors)
+    
+#     try:
+#         pcd = fetchPly(ply_path)
+#     except:
+#         pcd = None
+    
+#     scene_info = SceneInfo(
+#         point_cloud=pcd,
+#         train_cameras=train_cam_infos,
+#         test_cameras=test_cam_infos,
+#         nerf_normalization=nerf_normalization,
+#         ply_path=ply_path,
+#         is_nerf_synthetic=False
+#     )
+    
+#     return scene_info
+
+def load_smplx_vertices_from_npz(npz_path, smplx_model_path, gender='neutral', 
+                                 num_betas=100, num_expression_coeffs=50):
+    """从NPZ文件加载并生成SMPLX顶点"""
+    try:
+        import smplx,torch
+    except ImportError:
+        print("❌ 未安装 smplx 库，请运行: pip install smplx")
+        return None, None
+    
+    body_model = smplx.create(
+        model_path=smplx_model_path,
+        model_type='smplx',
+        gender=gender,
+        num_betas=num_betas,
+        num_expression_coeffs=num_expression_coeffs,
+        use_pca=False,
+        flat_hand_mean=True,
+        ext='npz'
+    )
+    
+    data = np.load(npz_path)
+    
+    betas = torch.from_numpy(data['betas']).float().unsqueeze(0)
+    trans = torch.from_numpy(data['trans']).float().unsqueeze(0)
+    root_orient = torch.from_numpy(data['root_orient']).float().unsqueeze(0)
+    pose_body = torch.from_numpy(data['pose_body']).float().unsqueeze(0)
+    pose_hand = torch.from_numpy(data['pose_hand']).float().unsqueeze(0)
+    expression = torch.from_numpy(data['expression']).float().unsqueeze(0)
+    
+    left_hand_pose = pose_hand[:, :45]
+    right_hand_pose = pose_hand[:, 45:]
+    
+    with torch.no_grad():
+        output = body_model(
+            betas=betas,
+            global_orient=root_orient,
+            body_pose=pose_body,
+            transl=trans,
+            left_hand_pose=left_hand_pose,
+            right_hand_pose=right_hand_pose,
+            expression=expression,
+            jaw_pose=torch.zeros(1, 3),
+            leye_pose=torch.zeros(1, 3),
+            reye_pose=torch.zeros(1, 3)
+        )
+        
+        vertices = output.vertices.squeeze(0).cpu().numpy()
+        faces = body_model.faces.astype(np.int32)
+    
+
+    
+    return vertices
+
+
+
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
-    "Blender" : readNerfSyntheticInfo
+    "Blender" : readNerfSyntheticInfo,
+    "Deform":readDeformSceneInfo
 }

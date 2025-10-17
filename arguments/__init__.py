@@ -62,6 +62,12 @@ class ModelParams(ParamGroup):
         self._background="bg"
         self.use_init_ply=True
         self.init_ply_path=""
+        self.start_frame=0
+        self.end_frame=100
+
+        self.rscale=1.0 #1/（rscale*resolution）是最终的缩放比例
+        self.batchnum=10 #batch数量，将所有相机分成batchnum块训练
+        self.looptimes=100 #所有batch训练一次为一个loop
 
         super().__init__(parser, "Loading Parameters", sentinel)
 
@@ -80,7 +86,7 @@ class PipelineParams(ParamGroup):
 
 class OptimizationParams(ParamGroup):
     def __init__(self, parser):
-        self.iterations = 30_000
+        self.iterations = 10_000
         self.position_lr_init = 0.00016
         self.position_lr_final = 0.0000016
         self.position_lr_delay_mult = 0.01
@@ -98,7 +104,7 @@ class OptimizationParams(ParamGroup):
         self.densification_interval = 100
         self.opacity_reset_interval = 3000
         self.densify_from_iter = 500
-        self.densify_until_iter = 15_000
+        self.densify_until_iter = 35_000
         self.densify_grad_threshold = 0.0002
         self.depth_l1_weight_init = 1.0
         self.depth_l1_weight_final = 0.01

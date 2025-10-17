@@ -29,6 +29,7 @@ except:
 
 #SUMO
 from scene.deformation import deform_network
+from deformation_tool import DeformationGraph,DeformationTransforms,apply_deformation_to_gaussians2
 
 class GaussianModel:
 
@@ -75,6 +76,12 @@ class GaussianModel:
         self.deformed_opa=torch.empty(0)
         self.deformed_shs=torch.empty(0)
 
+        self.bg_image_dict={}
+        self.deformed_gaussian_xyz={}
+        # self.deformation_graph=None
+        self.dg=None
+        self.base_xyz=None
+
         self.setup_functions()
 
     def capture(self):
@@ -91,6 +98,8 @@ class GaussianModel:
             self.denom,
             self.optimizer.state_dict(),
             self.spatial_lr_scale,
+            self.dg,
+            self.base_xyz,
             self._deformation.state_dict(),
         )
     
@@ -107,6 +116,8 @@ class GaussianModel:
         denom,
         opt_dict, 
         self.spatial_lr_scale,
+        self.dg,
+        self.base_xyz,
         deform_state) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
@@ -286,15 +297,6 @@ class GaussianModel:
         
         return lr_xyz
 
-    def update_deformed_gaussians(self,t):
-        time=torch.tensor(t).to(self._xyz.device).repeat(self._xyz.shape[0],1)
-        self.deformed_xyz,self.deformed_scl,self.deformed_rot,self.deformed_opa,self.deformed_shs=self._deformation(self._xyz,
-                                                                                    self._scaling,
-                                                                                    self._rotation, 
-                                                                                    self._opacity,
-                                                                                    self.get_features,
-                                                                                    time)
-
     def construct_list_of_attributes(self):
         l = ['x', 'y', 'z', 'nx', 'ny', 'nz']
         # All channels except the 3 DC
@@ -327,6 +329,8 @@ class GaussianModel:
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
+    
+
 
     def reset_opacity(self):
         opacities_new = self.inverse_opacity_activation(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
@@ -554,19 +558,19 @@ class GaussianModel:
 
         self.tmp_radii = radii
         #SUMO
-        # if self.get_xyz.shape[0]<360000:
+        print(f"Gaussian current: {self._xyz.shape[0]}")
         self.densify_and_clone(grads, max_grad, extent)
+        print(f"Gaussian clone: {self._xyz.shape[0]}")
         self.densify_and_split(grads, max_grad, extent)
-
+        print(f"Gaussian split: {self._xyz.shape[0]}")
         #SUMO
-        # if self.get_xyz.shape[0]>20000:
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
-
+        print(f"Gaussian prune: {self._xyz.shape[0]}")
          #SUMO
         self.canonical_gaussian_point_num-=prune_mask.sum()
 
@@ -579,6 +583,79 @@ class GaussianModel:
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor.grad[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
     
+    def set_base_xyz(self):
+        self.base_xyz=self._xyz.detach().clone()
+
+    def update_deformed_gaussians(self,deformer_path,t):
+        time=torch.tensor(t).to(self._xyz.device).repeat(self._xyz.shape[0],1)
+        
+        # self.deformed_xyz,self.deformed_scl,self.deformed_rot,self.deformed_opa,self.deformed_shs=self._deformation(self._xyz,
+        #                                                                             self._scaling,
+        #                                                                             self._rotation, 
+        #                                                                             self._opacity,
+        #                                                                             self.get_features,
+        #                                                                             time)
+        if self.base_xyz is None:
+            temp_xyz=self._xyz
+        else:
+            temp_xyz=self.get_deformed_gaussians(deformer_path)
+        
+        dx,ds,dr,do,dshs=self._deformation(self._xyz.detach(),
+                                            self._scaling.detach(),
+                                            self._rotation.detach(), 
+                                            self._opacity.detach(),
+                                            self.get_features.detach(),
+                                            time)
+        self.deformed_xyz=temp_xyz+dx
+        self.deformed_scl=self._scaling+ds
+        self.deformed_rot=self._rotation+dr
+        self.deformed_opa=self._opacity+do
+        self.deformed_shs=self.get_features+dshs
+
+        # self.deformed_xyz,self.deformed_scl,self.deformed_rot,self.deformed_opa,self.deformed_shs=(self._xyz,
+        #                                                                             self._scaling,
+        #                                                                             self._rotation, 
+        #                                                                             self._opacity,
+        #                                                                             self.get_features)
+    
+    def deform_init(self,dg_path):
+        self.dg_path=dg_path
+        self.dg = DeformationGraph()
+        self.dg.load(dg_path)
+
+    def get_deformed_gaussians(self,deformer_path):
+        if self.dg is None:
+            raise NameError("self.dg not initialize!")
+        if deformer_path not in self.deformed_gaussian_xyz:# or self._xyz.shape[0]!=self.deformed_gaussian_xyz[deformer_path].shape[0]:
+            transforms=DeformationTransforms()
+            transforms.load(deformer_path)
+            deformed_points=apply_deformation_to_gaussians2(self.dg,self.base_xyz.cpu().numpy(),transforms)
+            deformed_points=torch.as_tensor(deformed_points).to(self._xyz.device)
+            self.deformed_gaussian_xyz[deformer_path]=deformed_points
+            
+        # if self.deformed_opa.shape[0]>0:
+        #     self.save_ply_with_xyz(self.deformed_gaussian_xyz[deformer_path],deformer_path.replace("json","ply"))
+        return self.deformed_gaussian_xyz[deformer_path]
+
+    def save_ply_with_xyz(self,xyz,path):
+        mkdir_p(os.path.dirname(path))
+
+        xyz = xyz.cpu().numpy()
+        normals = np.zeros_like(xyz)
+        f_dc = self._features_dc.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        opacities = self.deformed_opa.detach().cpu().numpy()
+        scale = self.deformed_scl.detach().cpu().numpy()
+        rotation = self.deformed_rot.detach().cpu().numpy()
+
+        dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, 'vertex')
+        PlyData([el]).write(path)
+
     #SUMO
     def zero_gradients_and_optimizer_states(self):
         """

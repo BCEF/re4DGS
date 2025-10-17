@@ -51,10 +51,18 @@ def init_grid_param(
         new_grid_coef = nn.Parameter(torch.empty(
             [1, out_dim] + [reso[cc] for cc in coo_comb[::-1]]
         ))
-        if has_time_planes and 3 in coo_comb:  # Initialize time planes to 1
-            nn.init.ones_(new_grid_coef)
+        # if has_time_planes and 3 in coo_comb:  # Initialize time planes to 1
+        #     nn.init.ones_(new_grid_coef)
+        # else:
+        #     nn.init.uniform_(new_grid_coef, a=a, b=b)
+        
+        if has_time_planes and 3 in coo_comb:
+            # 🔧 修改：时间平面也初始化为小值
+            nn.init.uniform_(new_grid_coef, a=0.9, b=1.1)  # 接近1但不完全是1
         else:
-            nn.init.uniform_(new_grid_coef, a=a, b=b)
+            # 🔧 修改：使用更小的初始值
+            nn.init.uniform_(new_grid_coef, a=-0.01, b=0.01)
+
         grid_coefs.append(new_grid_coef)
 
     return grid_coefs

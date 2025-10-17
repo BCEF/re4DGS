@@ -39,43 +39,84 @@ class Deformation(nn.Module):
         hidden = self.feature_out(grid_feature)   
         return hidden
 
+    # def forward(self, rays_pts_emb, scales_emb=None, rotations_emb=None, opacity_emb = None,shs_emb=None, time_emb=None):
+    #     hidden = self.query_time(rays_pts_emb, time_emb)
+
+    #     if self.args.no_dx:
+    #         pts = rays_pts_emb
+    #     else:
+    #         dx = self.pos_deform(hidden)
+    #         pts = rays_pts_emb + dx
+    #     if self.args.no_ds:
+            
+    #         scales = scales_emb
+    #     else:
+    #         ds = self.scales_deform(hidden)
+    #         scales = scales_emb + ds
+            
+    #     if self.args.no_dr:
+    #         rotations = rotations_emb
+    #     else:
+    #         dr = self.rotations_deform(hidden)
+    #         if self.args.apply_rotation:
+    #             rotations = batch_quaternion_multiply(rotations_emb, dr)
+    #         else:
+    #             rotations = rotations_emb + dr
+
+    #     if self.args.no_do:
+    #         opacity = opacity_emb
+    #     else:
+    #         do = self.opacity_deform(hidden) 
+    #         opacity = opacity_emb + do
+
+    #     if self.args.no_dshs:
+    #         shs = shs_emb
+    #     else:
+    #         dshs = self.shs_deform(hidden).reshape([shs_emb.shape[0],16,3])
+    #         shs = shs_emb+ dshs
+
+    #     return pts, scales, rotations, opacity, shs
+    
     def forward(self, rays_pts_emb, scales_emb=None, rotations_emb=None, opacity_emb = None,shs_emb=None, time_emb=None):
         hidden = self.query_time(rays_pts_emb, time_emb)
 
         if self.args.no_dx:
-            pts = rays_pts_emb
+            dx=torch.zeros_like(rays_pts_emb)
         else:
             dx = self.pos_deform(hidden)
-            pts = rays_pts_emb + dx
         if self.args.no_ds:
-            
-            scales = scales_emb
+            ds=torch.zeros_like(scales_emb)
+            # scales = scales_emb
         else:
             ds = self.scales_deform(hidden)
-            scales = scales_emb + ds
+            # scales = scales_emb + ds
             
         if self.args.no_dr:
-            rotations = rotations_emb
+            dr=torch.zeros_like(rotations_emb)
+            # rotations = rotations_emb
         else:
             dr = self.rotations_deform(hidden)
-            if self.args.apply_rotation:
-                rotations = batch_quaternion_multiply(rotations_emb, dr)
-            else:
-                rotations = rotations_emb + dr
+            # if self.args.apply_rotation:
+            #     rotations = batch_quaternion_multiply(rotations_emb, dr)
+            # else:
+            #     rotations = rotations_emb + dr
 
         if self.args.no_do:
-            opacity = opacity_emb
+            # opacity = opacity_emb
+            do=torch.zeros_like(opacity_emb)
         else:
             do = self.opacity_deform(hidden) 
-            opacity = opacity_emb + do
+            # opacity = opacity_emb + do
 
         if self.args.no_dshs:
-            shs = shs_emb
+            # shs = shs_emb
+            dshs=torch.zeros_like(shs_emb)
         else:
             dshs = self.shs_deform(hidden).reshape([shs_emb.shape[0],16,3])
-            shs = shs_emb+ dshs
+            # shs = shs_emb+ dshs
 
-        return pts, scales, rotations, opacity, shs
+        return dx, ds, dr, do, dshs
+
     def get_mlp_parameters(self):
         parameter_list = []
         for name, param in self.named_parameters():

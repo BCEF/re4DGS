@@ -18,11 +18,12 @@ import cv2
 
 class Camera(nn.Module):
     def __init__(self, resolution, colmap_id, R, T, FoVx, FoVy, depth_params, image, 
-                 bg_path,#SUMO
                  invdepthmap,
                  image_name, uid,
                  trans=np.array([0.0, 0.0, 0.0]), scale=1.0, data_device = "cuda",
-                 train_test_exp = False, is_test_dataset = False, is_test_view = False
+                 train_test_exp = False, is_test_dataset = False, is_test_view = False,
+                 # 添加新的参数
+                 kid=0,timecode=0.0,deformer_path=None,bg_path=None
                  ):
         super(Camera, self).__init__()
 
@@ -33,8 +34,11 @@ class Camera(nn.Module):
         self.FoVx = FoVx
         self.FoVy = FoVy
         self.image_name = image_name
+        self.kid=kid
+        self.timecode=timecode
         self.bg_path=bg_path #SUMO
         self.resolution=resolution #SUMO
+        self.deformer_path=deformer_path #SUMO
 
         try:
             self.data_device = torch.device(data_device)
