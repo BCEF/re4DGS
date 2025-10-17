@@ -100,6 +100,12 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                 gaussians.deform_init(dg_path)
 
             viewpoint_stack = scene.getTrainCameras(dataset.rscale).copy()
+
+            #==================
+            for viewpoint in viewpoint_stack:
+                gaussians.export_deformed_gaussian(viewpoint)
+            #==================
+
             viewpoint_indices = list(range(len(viewpoint_stack)))
             ema_loss_for_log = 0.0
             ema_Ll1depth_for_log = 0.0
@@ -161,12 +167,12 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                 image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
                 #保存缓冲
-                if iteration % 500 == 1 or iteration<100:
+                if iteration % 500 == 1:
                     image_to_save =image.permute(1, 2, 0).detach().cpu().numpy()
                     # image_to_save = torch.clamp(image_to_save, 0, 1)
                     try:
                         os.makedirs(f"{dataset.model_path}/render_image/",exist_ok=True)
-                        plt.imsave(f"{dataset.model_path}/render_image/rendered-image{iteration-1}_{viewpoint_cam.image_name}.png", image_to_save)
+                        plt.imsave(f"{dataset.model_path}/render_image/rendered-image_{viewpoint_cam.image_name}_{iteration-1}.png", image_to_save)
                     except Exception as e:
                         print(e)
 
@@ -198,8 +204,8 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                     Ll1depth = 0
 
                 #SUMO
-                # tv_loss = gaussians.compute_regulation(hyper.time_smoothness_weight, hyper.l1_time_planes, hyper.plane_tv_weight)
-                # loss += tv_loss
+                tv_loss = gaussians.compute_regulation(hyper.time_smoothness_weight, hyper.l1_time_planes, hyper.plane_tv_weight)
+                loss += tv_loss
                 loss.backward()
 
                 

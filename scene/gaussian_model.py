@@ -656,6 +656,20 @@ class GaussianModel:
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
 
+    def export_deformed_gaussian(self,viewpoint):
+        if self.dg is None:
+            raise NameError("self.dg not initialize!")
+        deformer_path=viewpoint.deformer_path
+        # name=viewpoint.image_name
+        transforms=DeformationTransforms()
+        transforms.load(deformer_path)
+        deformed_points=apply_deformation_to_gaussians2(self.dg,self._xyz.cpu().numpy(),transforms)
+        deformed_points=torch.as_tensor(deformed_points).to(self._xyz.device)
+        self.deformed_gaussian_xyz[deformer_path]=deformed_points
+        
+        self.save_ply_with_xyz(self.deformed_gaussian_xyz[deformer_path],deformer_path.replace("json","ply"))
+
+
     #SUMO
     def zero_gradients_and_optimizer_states(self):
         """
