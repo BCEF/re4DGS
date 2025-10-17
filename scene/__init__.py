@@ -79,7 +79,7 @@ class Scene:
             colmap_folder=os.path.join(frame_folder,'sparse/0')
             if not os.path.exists(colmap_folder):
                 colmap_folder = os.path.join(root_folder, 'sparse/0')
-            tao_camera_path=os.path.join(root_folder,"cam_params.json")
+            # tao_camera_path=os.path.join(root_folder,"cam_params.json")
 
             bg_img_folder=os.path.join(frame_folder,'bg')
             if not os.path.exists(bg_img_folder):
@@ -88,7 +88,7 @@ class Scene:
             deformer_path=os.path.join(frame_folder,'transforms.json')
 
             scene_info=sceneLoadTypeCallbacks["Deform"](frame_folder,args.images, args.depths, args.eval, args.train_test_exp,
-                                                       colmap_folder=colmap_folder,tao_camera_path=tao_camera_path,
+                                                       colmap_folder=colmap_folder,root_folder=root_folder,
                                                        deformer_path=deformer_path,bg_img_folder=bg_img_folder,
                                                        kid=kid,timecode=timecode)
             if self.scene_info is None:

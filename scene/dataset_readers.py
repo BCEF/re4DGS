@@ -324,11 +324,11 @@ def readNerfSyntheticInfo(path, white_background, depths, eval, extension=".png"
     return scene_info
 
 #SUMO
-def readDeformSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8,colmap_folder=None,tao_camera_path=None,deformer_path=None,bg_img_folder=None,kid=0,timecode=0.0):
+def readDeformSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8,colmap_folder=None,root_folder=None,deformer_path=None,bg_img_folder=None,kid=0,timecode=0.0):
     reading_dir = "images" if images == None else images
 
     sparse_folder=os.path.join(path, "sparse/0") if colmap_folder is None else colmap_folder
-
+    tao_camera_path=os.path.join(root_folder,"cam_params.json")
     if os.path.exists(sparse_folder):
         cameras_extrinsic_file = os.path.join(sparse_folder, "images.bin")
         cameras_intrinsic_file = os.path.join(sparse_folder, "cameras.bin")
@@ -417,24 +417,11 @@ def readDeformSceneInfo(path, images, depths, eval, train_test_exp, llffhold=8,c
             depths_folder=os.path.join(path, depths) if depths != "" else "", test_cam_names_list=test_cam_names_list,
             )
         
-        ply_path=os.path.join(path,"input.ply")
+        ply_path=os.path.join(root_folder,"input.ply")
         if not os.path.exists(ply_path):
-            npz_path="/home/momo/Documents/xwechat_files/wxid_46mm76y10kh221_6c39/msg/file/2025-10/000000.npz"
-            # model_dict = np.load(npz_path)
-        
-            # # 获取最小形状顶点
-            # if 'minimal_shape' in model_dict:
-            #     vertices = model_dict['minimal_shape'].astype(np.float32)
-            # elif 'vertices' in model_dict:
-            #     vertices = model_dict['vertices'].astype(np.float32)
-            # else:
-            #     # 如果没有顶点，创建随机点云
-            #     print("No vertices found in SMPL-X model, using random point cloud")
-            #     num_pts = 10000
-            #     vertices = np.random.random((num_pts, 3)) * 2.0 - 1.0
-            
+            # npz_path="/home/momo/Documents/xwechat_files/wxid_46mm76y10kh221_6c39/msg/file/2025-10/000000.npz"
+            npz_path=os.path.join(root_folder,"smplx.npz")
             vertices=load_smplx_vertices_from_npz(npz_path,'./models/')
-            
             # 为顶点分配颜色（皮肤色）
             num_pts = len(vertices)
             colors = np.tile([200, 150, 100], (num_pts, 1))  # 皮肤色
