@@ -4,3 +4,4 @@ assets/
 bk/
 compare.py
 models/
+*.bk

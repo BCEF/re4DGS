@@ -28,9 +28,9 @@ except:
     pass
 
 #SUMO
-from scene.deformation import deform_network
+# from scene.deformation import deform_network
 from deformation_tool import DeformationGraph,DeformationTransforms,apply_deformation_to_gaussians2
-
+from scene.deformation import Deformation
 class GaussianModel:
 
     def setup_functions(self):
@@ -69,7 +69,8 @@ class GaussianModel:
         self.spatial_lr_scale = 0
 
         #SUMO
-        self._deformation = deform_network(args)
+        # self._deformation = deform_network(args)
+        self._deformation=Deformation()
         self.deformed_xyz=torch.empty(0)
         self.deformed_rot=torch.empty(0)
         self.deformed_scl=torch.empty(0)
@@ -591,22 +592,17 @@ class GaussianModel:
     def update_deformed_gaussians(self,deformer_path,t):
         time=torch.tensor(t).to(self._xyz.device).repeat(self._xyz.shape[0],1)
         
-        # self.deformed_xyz,self.deformed_scl,self.deformed_rot,self.deformed_opa,self.deformed_shs=self._deformation(self._xyz,
-        #                                                                             self._scaling,
-        #                                                                             self._rotation, 
-        #                                                                             self._opacity,
-        #                                                                             self.get_features,
-        #                                                                             time)
+
         if self.base_xyz is None:
             temp_xyz=self.compute_deformed_gaussian(deformer_path)
         else:
             temp_xyz=self.get_deformed_gaussians(deformer_path)
         
-        dx,ds,dr,do,dshs=self._deformation(self._xyz.detach(),
-                                            self._scaling.detach(),
-                                            self._rotation.detach(), 
-                                            self._opacity.detach(),
-                                            self.get_features.detach(),
+        dx,ds,dr,do,dshs=self._deformation(self._xyz,
+                                            # self._scaling.detach(),
+                                            # self._rotation.detach(), 
+                                            # self._opacity.detach(),
+                                            # self.get_features.detach(),
                                             time)
         self.deformed_xyz=temp_xyz+dx
         self.deformed_scl=self._scaling+ds
@@ -768,7 +764,7 @@ class GaussianModel:
    
 
     def _plane_regulation(self):
-        multi_res_grids = self._deformation.deformation_net.grid.grids
+        multi_res_grids = self._deformation.grid.grids
         total = 0
         # model.grids is 6 x [1, rank * F_dim, reso, reso]
         for grids in multi_res_grids:
@@ -780,7 +776,7 @@ class GaussianModel:
                 total += compute_plane_smoothness(grids[grid_id])
         return total
     def _time_regulation(self):
-        multi_res_grids = self._deformation.deformation_net.grid.grids
+        multi_res_grids = self._deformation.grid.grids
         total = 0
         # model.grids is 6 x [1, rank * F_dim, reso, reso]
         for grids in multi_res_grids:
@@ -793,7 +789,7 @@ class GaussianModel:
         return total
     def _l1_regulation(self):
                 # model.grids is 6 x [1, rank * F_dim, reso, reso]
-        multi_res_grids = self._deformation.deformation_net.grid.grids
+        multi_res_grids = self._deformation.grid.grids
 
         total = 0.0
         for grids in multi_res_grids:

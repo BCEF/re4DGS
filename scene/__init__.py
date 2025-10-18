@@ -137,7 +137,7 @@ class Scene:
         #SUMO 设置HexPlane的边界
         xyz_max = scene_info.point_cloud.points.max(axis=0)
         xyz_min = scene_info.point_cloud.points.min(axis=0)
-        self.gaussians._deformation.deformation_net.set_aabb(xyz_max,xyz_min)
+        self.gaussians._deformation.set_aabb(xyz_max,xyz_min)
         
         self.train_cameras = {}
         self.test_cameras = {}

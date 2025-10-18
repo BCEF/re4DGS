@@ -6,6 +6,16 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+
+def get_normalized_directions(directions):
+    """SH encoding must be in the range [0, 1]
+
+    Args:
+        directions: batch of directions
+    """
+    return (directions + 1.0) / 2.0
+
+
 def normalize_aabb(pts, aabb):
     return (pts - aabb[0]) * (2.0 / (aabb[1] - aabb[0])) - 1.0
 def grid_sample_wrapper(grid: torch.Tensor, coords: torch.Tensor, align_corners: bool = True) -> torch.Tensor:
@@ -51,18 +61,10 @@ def init_grid_param(
         new_grid_coef = nn.Parameter(torch.empty(
             [1, out_dim] + [reso[cc] for cc in coo_comb[::-1]]
         ))
-        # if has_time_planes and 3 in coo_comb:  # Initialize time planes to 1
-        #     nn.init.ones_(new_grid_coef)
-        # else:
-        #     nn.init.uniform_(new_grid_coef, a=a, b=b)
-        
-        if has_time_planes and 3 in coo_comb:
-            # 🔧 修改：时间平面也初始化为小值
-            nn.init.uniform_(new_grid_coef, a=0.9, b=1.1)  # 接近1但不完全是1
+        if has_time_planes and 3 in coo_comb:  # Initialize time planes to 1
+            nn.init.ones_(new_grid_coef)
         else:
-            # 🔧 修改：使用更小的初始值
-            nn.init.uniform_(new_grid_coef, a=-0.01, b=0.01)
-
+            nn.init.uniform_(new_grid_coef, a=a, b=b)
         grid_coefs.append(new_grid_coef)
 
     return grid_coefs
@@ -114,8 +116,10 @@ class HexPlaneField(nn.Module):
     ) -> None:
         super().__init__()
         aabb = torch.tensor([[bounds,bounds,bounds],
-                             [-bounds,-bounds,-bounds]])
-        self.aabb = nn.Parameter(aabb, requires_grad=False)
+                             [-bounds,-bounds,-bounds]]) 
+        
+        self.register_buffer('aabb', aabb, persistent=True)
+         
         self.grid_config =  [planeconfig]
         self.multiscale_res_multipliers = multires
         self.concat_features = True
@@ -142,6 +146,7 @@ class HexPlaneField(nn.Module):
             else:
                 self.feat_dim = gp[-1].shape[1]
             self.grids.append(gp)
+        # print(f"Initialized model grids: {self.grids}")
         print("feature_dim:",self.feat_dim)
     @property
     def get_aabb(self):
@@ -150,7 +155,7 @@ class HexPlaneField(nn.Module):
         aabb = torch.tensor([
             xyz_max,
             xyz_min
-        ],device="cuda",dtype=torch.float32)
+        ],dtype=torch.float32,device="cuda")
         self.aabb = nn.Parameter(aabb,requires_grad=False)
         print("Voxel Plane: set aabb=",self.aabb)
 
