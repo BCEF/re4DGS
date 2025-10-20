@@ -89,7 +89,7 @@ def evaluate_checkpoint(dataset, hyper, pipe, opt, start_checkpoint, batch_size=
     print(f"Saving results to: {save_dir}\n")
     
     # 创建PLY保存目录
-    ply_save_dir = os.path.join(save_dir, "deformed_gaussians")
+    ply_save_dir = os.path.join(save_dir, "ply")
     os.makedirs(ply_save_dir, exist_ok=True)
     
     saved_kids = set()
@@ -145,7 +145,7 @@ def evaluate_checkpoint(dataset, hyper, pipe, opt, start_checkpoint, batch_size=
             
             # 如果这个kid还没保存过，则保存变形后的高斯点
             if kid not in saved_kids:
-                ply_path = os.path.join(ply_save_dir, f"deformed_gaussians_kid_{kid}.ply")
+                ply_path = os.path.join(ply_save_dir, f"{kid:06}.ply")
                 gaussians.save_ply(ply_path)
                 saved_kids.add(kid)
                 tqdm.write(f"  → Saved deformed gaussians for kid {kid}")
@@ -283,13 +283,13 @@ def evaluate_checkpoint(dataset, hyper, pipe, opt, start_checkpoint, batch_size=
             f.write(f"| {kid} | {count} |\n")
         
         # 添加保存的PLY文件列表
-        f.write("\n## Saved Deformed Gaussian PLY Files\n\n")
+        f.write("\n## Saved Gaussian PLY Files\n\n")
         f.write(f"Location: `{ply_save_dir}`\n\n")
         for kid in sorted(list(saved_kids)):
             f.write(f"- `{kid:06d}.ply`\n")
     
     print(f"Markdown report saved to: {markdown_file}")
-    print(f"\nSaved {len(saved_kids)} deformed Gaussian PLY files to: {ply_save_dir}")
+    print(f"\nSaved {len(saved_kids)} Gaussian PLY files to: {ply_save_dir}")
     print(f"  Kids saved: {sorted(list(saved_kids))}")
     print(f"\n{'='*60}")
     print("Evaluation Complete!")
