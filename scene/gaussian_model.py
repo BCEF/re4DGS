@@ -29,7 +29,7 @@ except:
 
 #SUMO
 # from scene.deformation import deform_network
-from deformation_tool import DeformationGraph,DeformationTransforms,apply_deformation_to_gaussians2
+from deformation_tool import DeformationGraph,DeformationTransforms,apply_deformation_to_gaussians2,apply_deformation_to_gaussians_full
 from scene.deformation import Deformation
 class GaussianModel:
 
@@ -79,6 +79,7 @@ class GaussianModel:
 
         self.bg_image_dict={}
         self.deformed_gaussian_xyz={}
+        self.deformed_gaussian_rot={}
         # self.deformation_graph=None
         self.dg=None
         self.base_xyz=None
@@ -331,8 +332,6 @@ class GaussianModel:
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
     
-
-
     def reset_opacity(self):
         opacities_new = self.inverse_opacity_activation(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
@@ -392,6 +391,7 @@ class GaussianModel:
         self.active_sh_degree = self.max_sh_degree
 
         self.base_xyz=self._xyz.detach().clone()
+        self.base_quat=self._rotation.detach().clone()
 
     #SUMO 完善加载ply时未能初始化的参数
     def fixup_params(self,cam_infos,spatial_lr_scale : float):
@@ -588,6 +588,7 @@ class GaussianModel:
     
     def set_base_xyz(self):
         self.base_xyz=self._xyz.detach().clone()
+        self.base_quat=self._rotation.detach().clone()
 
     def update_deformed_gaussians(self,deformer_path,t):
         time=torch.tensor(t).to(self._xyz.device).repeat(self._xyz.shape[0],1)
@@ -596,7 +597,7 @@ class GaussianModel:
         if self.base_xyz is None:
             temp_xyz=self.compute_deformed_gaussian(deformer_path)
         else:
-            temp_xyz=self.get_deformed_gaussians(deformer_path)
+            temp_xyz,temp_rot=self.get_deformed_gaussians(deformer_path)
         
         dx,ds,dr,do,dshs=self._deformation(self._xyz,
                                             # self._scaling.detach(),
@@ -606,7 +607,7 @@ class GaussianModel:
                                             time)
         self.deformed_xyz=temp_xyz+dx
         self.deformed_scl=self._scaling+ds
-        self.deformed_rot=self._rotation+dr
+        self.deformed_rot=temp_rot+dr
         self.deformed_opa=self._opacity+do
         self.deformed_shs=self.get_features+dshs
 
@@ -627,11 +628,17 @@ class GaussianModel:
         if deformer_path not in self.deformed_gaussian_xyz:# or self._xyz.shape[0]!=self.deformed_gaussian_xyz[deformer_path].shape[0]:
             transforms=DeformationTransforms()
             transforms.load(deformer_path)
-            deformed_points=apply_deformation_to_gaussians2(self.dg,self.base_xyz.cpu().numpy(),transforms)
-            deformed_points=torch.as_tensor(deformed_points).to(self._xyz.device)
+            # deformed_points=apply_deformation_to_gaussians2(self.dg,self.base_xyz.cpu().numpy(),transforms)
+            # deformed_points=torch.as_tensor(deformed_points).to(self._xyz.device)
+
+            input_gs={"xyz":self.base_xyz.cpu().numpy(),"rotations":self.base_quat.cpu().numpy()}
+            deformed_gaussian=apply_deformation_to_gaussians_full(self.dg,input_gs,transforms)
+            deformed_points=torch.as_tensor(deformed_gaussian["xyz"]).to(self._xyz.device)
+            deformed_rots=torch.as_tensor(deformed_gaussian["rotations"]).to(self._xyz.device)
             self.deformed_gaussian_xyz[deformer_path]=deformed_points
+            self.deformed_gaussian_rot[deformer_path]=deformed_rots
             
-        return self.deformed_gaussian_xyz[deformer_path]
+        return self.deformed_gaussian_xyz[deformer_path],self.deformed_gaussian_rot[deformer_path]
     
     def compute_deformed_gaussian(self,deformer_path):
         transforms=DeformationTransforms()

@@ -286,7 +286,7 @@ def evaluate_checkpoint(dataset, hyper, pipe, opt, start_checkpoint, batch_size=
         f.write("\n## Saved Deformed Gaussian PLY Files\n\n")
         f.write(f"Location: `{ply_save_dir}`\n\n")
         for kid in sorted(list(saved_kids)):
-            f.write(f"- `deformed_gaussians_kid_{kid}.ply`\n")
+            f.write(f"- `{kid:06d}.ply`\n")
     
     print(f"Markdown report saved to: {markdown_file}")
     print(f"\nSaved {len(saved_kids)} deformed Gaussian PLY files to: {ply_save_dir}")
