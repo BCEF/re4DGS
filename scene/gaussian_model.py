@@ -102,6 +102,7 @@ class GaussianModel:
             self.spatial_lr_scale,
             self.dg,
             self.base_xyz,
+            self.base_quat,
             self._deformation.state_dict(),
         )
     
@@ -120,6 +121,7 @@ class GaussianModel:
         self.spatial_lr_scale,
         self.dg,
         self.base_xyz,
+        self.base_quat,
         deform_state) = model_args
         self.training_setup(training_args)
         self.xyz_gradient_accum = xyz_gradient_accum
