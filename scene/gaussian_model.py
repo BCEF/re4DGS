@@ -647,7 +647,7 @@ class GaussianModel:
         deformed_points=torch.as_tensor(deformed_points).to(self._xyz.device)
         return deformed_points
 
-    def save_ply_with_xyz(self,xyz,path):
+    def save_ply_with_xyz(self,xyz,rots,path):
         mkdir_p(os.path.dirname(path))
 
         xyz = xyz.cpu().numpy()
@@ -656,7 +656,7 @@ class GaussianModel:
         f_rest = self._features_rest.detach().transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
         opacities = self._opacity.detach().cpu().numpy()
         scale = self._scaling.detach().cpu().numpy()
-        rotation = self._rotation.detach().cpu().numpy()
+        rotation = rots.cpu().numpy()
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
@@ -673,11 +673,14 @@ class GaussianModel:
         # name=viewpoint.image_name
         transforms=DeformationTransforms()
         transforms.load(deformer_path)
-        deformed_points=apply_deformation_to_gaussians2(self.dg,self._xyz.detach().clone().cpu().numpy(),transforms)
-        deformed_points=torch.as_tensor(deformed_points).to(self._xyz.device)
+        input_gs={"xyz":self.base_xyz.cpu().numpy(),"rotations":self.base_quat.cpu().numpy()}
+        deformed_gaussian=apply_deformation_to_gaussians_full(self.dg,input_gs,transforms)
+        deformed_points=torch.as_tensor(deformed_gaussian["xyz"]).to(self._xyz.device)
+        deformed_rots=torch.as_tensor(deformed_gaussian["rotations"]).to(self._xyz.device)
         self.deformed_gaussian_xyz[deformer_path]=deformed_points
+        self.deformed_gaussian_rot[deformer_path]=deformed_rots
         
-        self.save_ply_with_xyz(self.deformed_gaussian_xyz[deformer_path],deformer_path.replace("json","ply"))
+        self.save_ply_with_xyz(self.deformed_gaussian_xyz[deformer_path],self.deformed_gaussian_rot[deformer_path],deformer_path.replace("json","ply"))
 
 
     #SUMO
