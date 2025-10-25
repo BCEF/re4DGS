@@ -887,7 +887,14 @@ def readMultiFrameNerfSyntheticCameras(path, transformsfile, depths_folder, whit
             if len(frame_list) > 0 and "time" in frame_list[0]:
                 timecode = frame_list[0]["time"]
             
-            print(f"Processing frame {frame_id} (timecode: {timecode:.3f}, {len(frame_list)} cameras)")
+            # 查找该帧的deformer_path
+            frame_folder_name = f"{frame_id:06d}"  # 格式化为000000, 000001等
+            frame_folder_path = os.path.join(path, frame_folder_name)
+            frame_deformer = os.path.join(frame_folder_path, "transforms.json")
+            
+            deformer_path = frame_deformer if os.path.exists(frame_deformer) else None
+            
+            print(f"Processing frame {frame_id} (timecode: {timecode:.3f}, {len(frame_list)} cameras, deformer: {deformer_path is not None})")
             
             # 处理该帧的所有相机
             for idx, frame_data in enumerate(frame_list):
@@ -938,7 +945,6 @@ def readMultiFrameNerfSyntheticCameras(path, transformsfile, depths_folder, whit
                 depth_path = ""
                 if depths_folder != "":
                     # 深度图与图像对应
-                    depth_name = os.path.splitext(image_name)[0] + ".png"
                     depth_full_path = os.path.join(depths_folder, file_path.replace(extension, ".png"))
                     if os.path.exists(depth_full_path):
                         depth_path = depth_full_path
@@ -948,6 +954,8 @@ def readMultiFrameNerfSyntheticCameras(path, transformsfile, depths_folder, whit
                 
                 # 背景图路径
                 bg_path = image_path.replace('/images/', '/bg/')
+                if not os.path.exists(bg_path):
+                    bg_path = None
                 
                 cam_info = CameraInfo(
                     uid=uid,
@@ -957,7 +965,7 @@ def readMultiFrameNerfSyntheticCameras(path, transformsfile, depths_folder, whit
                     FovX=FovX,
                     image_path=image_path,
                     image_name=image_name,
-                    bg_path=bg_path if os.path.exists(bg_path) else None,
+                    bg_path=bg_path,
                     width=image.size[0],
                     height=image.size[1],
                     depth_path=depth_path,
@@ -968,7 +976,7 @@ def readMultiFrameNerfSyntheticCameras(path, transformsfile, depths_folder, whit
                 # 添加多帧相关信息
                 cam_info.kid = frame_id
                 cam_info.timecode = timecode
-                cam_info.deformer_path = None  # 稍后设置
+                cam_info.deformer_path = deformer_path  # 设置该帧的deformer路径
                 
                 cam_infos.append(cam_info)
 
@@ -1039,12 +1047,6 @@ def readMultiFrameNerfSyntheticInfo(path, images, depths, eval, white_background
         print(f"Warning: Failed to load point cloud: {e}")
         pcd = None
 
-    # 设置变形路径（如果存在）
-    deformer_path = os.path.join(path, "transforms.json")
-    if os.path.exists(deformer_path):
-        for cam_info in train_cam_infos + test_cam_infos:
-            cam_info.deformer_path = deformer_path
-    
     # 计算归一化参数
     nerf_normalization = getNerfppNorm(train_cam_infos)
 
@@ -1063,6 +1065,10 @@ def readMultiFrameNerfSyntheticInfo(path, images, depths, eval, white_background
     for cam in test_cam_infos:
         test_frames[cam.kid] = test_frames.get(cam.kid, 0) + 1
     print(f"Test frames: {len(test_frames)} frames")
+    
+    # 统计deformer使用情况
+    deformer_count = sum(1 for cam in train_cam_infos + test_cam_infos if cam.deformer_path is not None)
+    print(f"Cameras with deformer: {deformer_count}/{len(train_cam_infos) + len(test_cam_infos)}")
     print("="*60 + "\n")
 
     scene_info = SceneInfo(
