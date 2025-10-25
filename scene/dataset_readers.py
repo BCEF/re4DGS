@@ -829,10 +829,256 @@ def load_smplx_vertices_from_npz(npz_path, smplx_model_path, gender='neutral',
     
     return vertices
 
+#SUMO
+def readMultiFrameNerfSyntheticCameras(path, transformsfile, depths_folder, white_background, 
+                                        is_test, extension=".jpg", start_frame=0, end_frame=9999):
+    """
+    读取多帧NeRF Synthetic数据集的相机参数
+    所有帧的数据都在一个transforms文件中
+    
+    Args:
+        path: 数据集根目录
+        transformsfile: transforms文件名（如 "transforms_train.json"）
+        depths_folder: 深度图文件夹路径
+        white_background: 是否使用白色背景
+        is_test: 是否为测试集
+        extension: 图像扩展名
+        start_frame: 起始帧
+        end_frame: 结束帧
+    """
+    cam_infos = []
 
+    with open(os.path.join(path, transformsfile)) as json_file:
+        contents = json.load(json_file)
+        fovx = contents["camera_angle_x"]
+        frames = contents["frames"]
+        
+        # 按帧分组
+        frame_groups = {}
+        for frame_data in frames:
+            file_path = frame_data["file_path"]
+            # 提取帧编号，如 "/000000/images/001.jpg" -> "000000"
+            frame_id_str = file_path.split('/')[1] if file_path.startswith('/') else file_path.split('/')[0]
+            
+            # 转换为整数帧ID
+            try:
+                frame_id = int(frame_id_str)
+            except ValueError:
+                print(f"Warning: Cannot parse frame ID from path: {file_path}")
+                continue
+            
+            # 过滤帧范围
+            if frame_id < start_frame or frame_id > end_frame:
+                continue
+            
+            if frame_id not in frame_groups:
+                frame_groups[frame_id] = []
+            frame_groups[frame_id].append(frame_data)
+        
+        print(f"Found {len(frame_groups)} frames in range [{start_frame}, {end_frame}]")
+        
+        # 处理每一帧
+        total_frames = len(frame_groups)
+        for frame_id in sorted(frame_groups.keys()):
+            frame_list = frame_groups[frame_id]
+            timecode = float(frame_id) / max(total_frames, 1) if total_frames > 1 else 0.0
+            
+            # 如果JSON中有time字段，优先使用
+            if len(frame_list) > 0 and "time" in frame_list[0]:
+                timecode = frame_list[0]["time"]
+            
+            print(f"Processing frame {frame_id} (timecode: {timecode:.3f}, {len(frame_list)} cameras)")
+            
+            # 处理该帧的所有相机
+            for idx, frame_data in enumerate(frame_list):
+                file_path = frame_data["file_path"]
+                
+                # 处理路径：移除开头的'/'
+                if file_path.startswith('/'):
+                    file_path = file_path[1:]
+                
+                # 构建完整路径
+                cam_name = file_path if file_path.endswith(extension) else file_path + extension
+                image_path = os.path.join(path, cam_name)
+                image_name = os.path.basename(cam_name)
+                
+                # NeRF 'transform_matrix' 是相机到世界的变换
+                c2w = np.array(frame_data["transform_matrix"])
+                # 从OpenGL/Blender坐标系转换到COLMAP坐标系
+                c2w[:3, 1:3] *= -1
+
+                # 获取世界到相机的变换
+                w2c = np.linalg.inv(c2w)
+                R = np.transpose(w2c[:3, :3])  # R存储为转置（因为CUDA代码中的glm）
+                T = w2c[:3, 3]
+
+                # 读取图像
+                if not os.path.exists(image_path):
+                    print(f"Warning: Image not found: {image_path}")
+                    continue
+                    
+                image = Image.open(image_path)
+
+                # 处理RGBA图像
+                if image.mode == 'RGBA':
+                    im_data = np.array(image.convert("RGBA"))
+                    bg = np.array([1, 1, 1]) if white_background else np.array([0, 0, 0])
+                    norm_data = im_data / 255.0
+                    arr = norm_data[:, :, :3] * norm_data[:, :, 3:4] + bg * (1 - norm_data[:, :, 3:4])
+                    image = Image.fromarray(np.array(arr * 255.0, dtype=np.uint8), "RGB")
+                elif image.mode != 'RGB':
+                    image = image.convert("RGB")
+
+                # 计算FOV
+                fovy = focal2fov(fov2focal(fovx, image.size[0]), image.size[1])
+                FovY = fovy
+                FovX = fovx
+
+                # 深度图路径
+                depth_path = ""
+                if depths_folder != "":
+                    # 深度图与图像对应
+                    depth_name = os.path.splitext(image_name)[0] + ".png"
+                    depth_full_path = os.path.join(depths_folder, file_path.replace(extension, ".png"))
+                    if os.path.exists(depth_full_path):
+                        depth_path = depth_full_path
+
+                # 生成唯一ID
+                uid = frame_id * 10000 + idx
+                
+                # 背景图路径
+                bg_path = image_path.replace('/images/', '/bg/')
+                
+                cam_info = CameraInfo(
+                    uid=uid,
+                    R=R,
+                    T=T,
+                    FovY=FovY,
+                    FovX=FovX,
+                    image_path=image_path,
+                    image_name=image_name,
+                    bg_path=bg_path if os.path.exists(bg_path) else None,
+                    width=image.size[0],
+                    height=image.size[1],
+                    depth_path=depth_path,
+                    depth_params=None,
+                    is_test=is_test
+                )
+                
+                # 添加多帧相关信息
+                cam_info.kid = frame_id
+                cam_info.timecode = timecode
+                cam_info.deformer_path = None  # 稍后设置
+                
+                cam_infos.append(cam_info)
+
+    return cam_infos
+
+
+def readMultiFrameNerfSyntheticInfo(path, images, depths, eval, white_background, 
+                                     extension=".jpg", start_frame=0, end_frame=9999,
+                                     train_test_exp=False):
+    """
+    读取多帧NeRF Synthetic数据集
+    
+    Args:
+        path: 数据集根目录
+        images: 图像文件夹（未使用，保持接口一致）
+        depths: 深度图文件夹名称
+        eval: 是否为评估模式
+        white_background: 是否使用白色背景
+        extension: 图像扩展名
+        start_frame: 起始帧
+        end_frame: 结束帧
+        train_test_exp: 是否扩展训练集（包含测试集）
+    """
+    depths_folder = os.path.join(path, depths) if depths != "" else ""
+    
+    print("="*60)
+    print("Reading Multi-Frame NeRF Synthetic Dataset")
+    print("="*60)
+    
+    # 读取训练相机
+    print("\nReading Training Transforms (All Frames)...")
+    train_cam_infos = readMultiFrameNerfSyntheticCameras(
+        path, "transforms_train.json", depths_folder, white_background, 
+        False, extension, start_frame, end_frame
+    )
+    
+    # 读取测试相机
+    print("\nReading Test Transforms (All Frames)...")
+    test_cam_infos = readMultiFrameNerfSyntheticCameras(
+        path, "transforms_test.json", depths_folder, white_background,
+        True, extension, start_frame, end_frame
+    )
+    
+    # 评估模式处理
+    if not eval:
+        train_cam_infos.extend(test_cam_infos)
+        test_cam_infos = []
+    
+    # 如果需要扩展训练集
+    if train_test_exp and eval:
+        all_cam_infos = train_cam_infos + test_cam_infos
+        train_cam_infos = all_cam_infos
+        test_cam_infos = [c for c in all_cam_infos if c.is_test]
+
+    # 读取或生成点云
+    ply_path = os.path.join(path, "points3d.ply")
+    if not os.path.exists(ply_path):
+        num_pts = 100_000
+        print(f"\nGenerating random point cloud ({num_pts})...")
+        xyz = np.random.random((num_pts, 3)) * 2.6 - 1.3
+        shs = np.random.random((num_pts, 3)) / 255.0
+        pcd = BasicPointCloud(points=xyz, colors=SH2RGB(shs), normals=np.zeros((num_pts, 3)))
+        storePly(ply_path, xyz, SH2RGB(shs) * 255)
+    
+    try:
+        pcd = fetchPly(ply_path)
+    except Exception as e:
+        print(f"Warning: Failed to load point cloud: {e}")
+        pcd = None
+
+    # 设置变形路径（如果存在）
+    deformer_path = os.path.join(path, "transforms.json")
+    if os.path.exists(deformer_path):
+        for cam_info in train_cam_infos + test_cam_infos:
+            cam_info.deformer_path = deformer_path
+    
+    # 计算归一化参数
+    nerf_normalization = getNerfppNorm(train_cam_infos)
+
+    print("\n" + "="*60)
+    print(f"Multi-Frame NeRF Synthetic Loading Complete")
+    print(f"Total train cameras: {len(train_cam_infos)}")
+    print(f"Total test cameras: {len(test_cam_infos)}")
+    
+    # 统计每帧的相机数量
+    train_frames = {}
+    for cam in train_cam_infos:
+        train_frames[cam.kid] = train_frames.get(cam.kid, 0) + 1
+    print(f"Train frames: {len(train_frames)} frames")
+    
+    test_frames = {}
+    for cam in test_cam_infos:
+        test_frames[cam.kid] = test_frames.get(cam.kid, 0) + 1
+    print(f"Test frames: {len(test_frames)} frames")
+    print("="*60 + "\n")
+
+    scene_info = SceneInfo(
+        point_cloud=pcd,
+        train_cameras=train_cam_infos,
+        test_cameras=test_cam_infos,
+        nerf_normalization=nerf_normalization,
+        ply_path=ply_path,
+        is_nerf_synthetic=True
+    )
+    
+    return scene_info
 
 sceneLoadTypeCallbacks = {
     "Colmap": readColmapSceneInfo,
     "Blender" : readNerfSyntheticInfo,
-    "Deform":readDeformSceneInfo
+    "Deform":readDeformSceneInfo,
+    "MultiFrameNerfSynthetic": readMultiFrameNerfSyntheticInfo,
 }

@@ -48,7 +48,7 @@ class Scene:
         self.args=args
         #SUMO 初始化background字典
         self.bg_image_dict={}
-        self.loadMultiFrameSceneInfo(args, shuffle)
+        self.loadMultiFrameNerfSyntheticInfo(args, shuffle)
 
 
     # def loadOneFrameSceneInfo(self,args,shuffle=True):
@@ -63,6 +63,26 @@ class Scene:
     #     self.scene_info=scene_info
     #     self.loadSceneInfo(args,shuffle,scene_info)
     
+    # 在类中使用的加载函数
+    def loadMultiFrameNerfSyntheticInfo(self, args, shuffle=True):
+        """
+        加载多帧NeRF Synthetic数据集
+        """
+        scene_info = sceneLoadTypeCallbacks["MultiFrameNerfSynthetic"](
+            path=args.source_path,
+            images=args.images,
+            depths=args.depths,
+            eval=args.eval,
+            white_background=args.white_background,
+            extension=getattr(args, 'extension', '.jpg'),
+            start_frame=getattr(args, 'start_frame', 0),
+            end_frame=getattr(args, 'end_frame', 9999),
+            train_test_exp=getattr(args, 'train_test_exp', False)
+        )
+        
+        self.scene_info = scene_info
+        self.loadSceneInfo(args, shuffle)
+
     def loadMultiFrameSceneInfo(self,args,shuffle=True):
         root_folder=args.source_path
         subfolders = [f for f in os.listdir(root_folder) if 'sparse' not in f and os.path.isdir(os.path.join(root_folder,f)) and 'bg' not in f]
