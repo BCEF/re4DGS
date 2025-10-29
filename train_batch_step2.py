@@ -155,13 +155,13 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                 if (local_iteration - 1) == debug_from:
                     pipe.debug = True
 
-                #SUMO
-                if dataset.use_background_image and os.path.exists(viewpoint_cam.bg_path):
-                    bg=scene.get_background_image(viewpoint_cam)
+                # #SUMO
+                # if dataset.use_background_image and os.path.exists(viewpoint_cam.bg_path):
+                #     bg=scene.get_background_image(viewpoint_cam)
 
-                #SUMO
-                gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
-
+                # #SUMO
+                # gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
+                gaussians.update_deformed_gaussians_step2(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
 
                 render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp)
                 image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
@@ -204,8 +204,8 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                     Ll1depth = 0
 
                 #SUMO
-                tv_loss = gaussians.compute_regulation(hyper.time_smoothness_weight, hyper.l1_time_planes, hyper.plane_tv_weight)
-                loss += tv_loss
+                # tv_loss = gaussians.compute_regulation(hyper.time_smoothness_weight, hyper.l1_time_planes, hyper.plane_tv_weight)
+                # loss += tv_loss
                 loss.backward()
 
                 
@@ -229,18 +229,19 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                     # training_report(tb_writer, global_iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
                     
                     # Densification
-                    if global_iteration < opt.densify_until_iter:
+                    if local_iteration < opt.densify_until_iter:
                         # Keep track of max radii in image-space for pruning
                         gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                         gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
 
-                        if global_iteration > opt.densify_from_iter and global_iteration % opt.densification_interval == 0:# and gaussians.get_xyz.shape[0]<360000:
-                            size_threshold = 20 if global_iteration > opt.opacity_reset_interval else None
+                        if local_iteration > opt.densify_from_iter and local_iteration % opt.densification_interval == 0:# and gaussians.get_xyz.shape[0]<360000:
+                            size_threshold = 20 if local_iteration > opt.opacity_reset_interval else None
                             gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
-                            gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
+                            # gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
+                            gaussians.update_deformed_gaussians_step2(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
                             print(f"Gaussian splatting points: {gaussians._xyz.shape[0]}")
                         
-                        if global_iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and global_iteration == opt.densify_from_iter):
+                        if local_iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and local_iteration == opt.densify_from_iter):
                             gaussians.reset_opacity()
                     
 

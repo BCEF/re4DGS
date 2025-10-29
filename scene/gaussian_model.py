@@ -83,7 +83,7 @@ class GaussianModel:
         # self.deformation_graph=None
         self.dg=None
         self.base_xyz=None
-
+        self.base_quat=None
         self.setup_functions()
 
     def capture(self):
@@ -619,6 +619,13 @@ class GaussianModel:
         #                                                                             self._opacity,
         #                                                                             self.get_features)
     
+    def update_deformed_gaussians_step2(self,deformer_path,t):
+        self.deformed_xyz,self.deformed_scl,self.deformed_rot,self.deformed_opa,self.deformed_shs=(self._xyz,
+                                                                                    self._scaling,
+                                                                                    self._rotation, 
+                                                                                    self._opacity,
+                                                                                    self.get_features)
+
     def deform_init(self,dg_path):
         self.dg_path=dg_path
         self.dg = DeformationGraph()
