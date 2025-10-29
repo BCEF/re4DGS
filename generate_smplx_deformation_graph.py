@@ -53,15 +53,15 @@ def load_smplx_vertices_from_npz(npz_path, smplx_model_path, gender='neutral',
     return vertices,faces
 
 
-from deformation_tool import generate_deformation_graph
+from deformation_tool import generate_deformation_graph,generate_deformation_graph_auto
 from deformation_tool import compute_deformation_transforms
 if __name__=="__main__":
     ref_model="/home/momo/Desktop/tao_data_2/000090/000090.npz"
     deformation_graph_path="/home/momo/Desktop/tao_data_2/"
     vertices,faces=load_smplx_vertices_from_npz(ref_model,"./models")
-    dg=generate_deformation_graph(
+    dg=generate_deformation_graph_auto(
         vertices=vertices,
-        faces=faces,
+        # faces=faces,
         node_num=200,
         radius_coef=2.1,
         node_nodes_num=8,       # 每个节点的最大连接节点数
