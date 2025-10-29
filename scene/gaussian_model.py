@@ -602,22 +602,12 @@ class GaussianModel:
             temp_xyz,temp_rot=self.get_deformed_gaussians(deformer_path)
         
         dx,ds,dr,do,dshs=self._deformation(self._xyz,
-                                            # self._scaling.detach(),
-                                            # self._rotation.detach(), 
-                                            # self._opacity.detach(),
-                                            # self.get_features.detach(),
                                             time)
         self.deformed_xyz=temp_xyz+dx
         self.deformed_scl=self._scaling+ds
         self.deformed_rot=temp_rot+dr
         self.deformed_opa=self._opacity+do
         self.deformed_shs=self.get_features+dshs
-
-        # self.deformed_xyz,self.deformed_scl,self.deformed_rot,self.deformed_opa,self.deformed_shs=(self._xyz,
-        #                                                                             self._scaling,
-        #                                                                             self._rotation, 
-        #                                                                             self._opacity,
-        #                                                                             self.get_features)
     
     def update_deformed_gaussians_step2(self,deformer_path,t):
         self.deformed_xyz,self.deformed_scl,self.deformed_rot,self.deformed_opa,self.deformed_shs=(self._xyz,

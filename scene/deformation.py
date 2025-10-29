@@ -10,7 +10,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.nn.init as init 
 from .hexplane import HexPlaneField
-
+from .rotation_utils import rotation_6d_to_quaternion
 # 配置参数
 bounds=1.6
 kplanes_config = {
@@ -82,10 +82,10 @@ class Deformation(nn.Module):
         self.feature_out = nn.Sequential(*self.feature_out)
         self.pos_deform = nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 3))
         self.scales_deform = nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 3))
-        self.rotations_deform = nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 4))
+        # self.rotations_deform = nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 4))
         
-        
-          
+        #SUMO
+        self.rotations_deform = nn.Sequential(nn.ReLU(), nn.Linear(self.W, self.W), nn.ReLU(), nn.Linear(self.W, 6))
  
         self.opacity_deform = nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 1))
         self.shs_deform = nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 16*3))
@@ -134,15 +134,22 @@ class Deformation(nn.Module):
                 nn.init.constant_(last.weight, 1e-3)
                 nn.init.zeros_(last.bias)
             
-            elif mode == "6d_rotation": 
-                for m in self.mlp:
-                    if isinstance(m, nn.Linear):
-                        nn.init.kaiming_uniform_(m.weight, a=0.0, nonlinearity='relu')
-                        nn.init.constant_(m.bias, 0.0)
-                # 让最后一层更“保守”，靠近身份旋转（6D 全 0 经正交化趋近单位）
-                last = self.mlp[-1]
+            # elif mode == "6d_rotation": 
+            #     for m in self.mlp:
+            #         if isinstance(m, nn.Linear):
+            #             nn.init.kaiming_uniform_(m.weight, a=0.0, nonlinearity='relu')
+            #             nn.init.constant_(m.bias, 0.0)
+            #     # 让最后一层更“保守”，靠近身份旋转（6D 全 0 经正交化趋近单位）
+            #     last = self.mlp[-1]
+            #     nn.init.uniform_(last.weight, -1e-3, 1e-3)
+            #     nn.init.constant_(last.bias, 0.0)
+            
+            elif mode == "6d_rotation":
+                # 初始化为单位旋转的6D表示：[1,0,0, 0,1,0]
                 nn.init.uniform_(last.weight, -1e-3, 1e-3)
-                nn.init.constant_(last.bias, 0.0)
+                nn.init.zeros_(last.bias)
+                last.bias.data[0] = 1.0  # a1 = [1,0,0]
+                last.bias.data[4] = 1.0  # a2 = [0,1,0]
 
             elif mode == "axis_angle":
                 # 关键：用更大的标准差，让初始旋转分散
@@ -155,7 +162,7 @@ class Deformation(nn.Module):
 
             init_head(self.pos_deform,    mode="residual")
             init_head(self.scales_deform, mode="absolute_vec")
-            init_head(self.rotations_deform, mode="quat_identity")  # ← 只改这个
+            init_head(self.rotations_deform, mode="6d_rotation")  # ← 只改这个
             init_head(self.opacity_deform, mode="residual")
             init_head(self.shs_deform,    mode="residual")
 
@@ -167,64 +174,30 @@ class Deformation(nn.Module):
     def query_time(self, rays_pts_emb, time_emb):
         grid_feature = self.grid(rays_pts_emb[:,:3], time_emb[:,:1])
         hidden = self.feature_out(grid_feature)   
-
         return hidden
      
     
     def forward(self, rays_pts_emb, time_emb=None):
-        #if time_emb is None:
-        #    return self.forward_static(rays_pts_emb[:,:3])
-        #else:
-        #    return self.forward_dynamic(rays_pts_emb, scales_emb, rotations_emb, opacity, shs_emb, time_feature, time_emb)
-
         return self.forward_dynamic(rays_pts_emb, time_emb)
-
-
 
     def forward_static(self, rays_pts_emb):
         grid_feature = self.grid(rays_pts_emb[:,:3])
         dx = self.static_mlp(grid_feature)
         return rays_pts_emb[:, :3] + dx
     
-
-
     def forward_dynamic(self,pts_emb,  time_emb):
 
         hidden = self.query_time(pts_emb, time_emb)
          
-         
         # breakpoint()
         dx = self.pos_deform(hidden)
-        #pts = torch.zeros_like(pts_emb[:,:3])
-        #pts = pts_emb[:,:3]*mask + dx
-
-        
-        dr = self.rotations_deform(hidden)
-        #rotations = torch.zeros_like(rotations_emb[:,:4])
-        #rotations = rotations_emb[:,:4] + dr
-
-
-        
+        # dr = self.rotations_deform(hidden)
+        d6 = self.rotations_deform(hidden)  # (N, 6)
+        # 转换为四元数
+        dr = rotation_6d_to_quaternion(d6)  # (N, 4)
         ds = self.scales_deform(hidden)
-        #ds = 1.0 * torch.tanh(ds_raw)   # 残差范围 (-1, 1)
-
-        #alpha = 0.25 #比较稳
-        #ds = alpha * torch.tanh(ds_raw) # 让变形尺度更平滑一些
-
-        #scales = torch.zeros_like(scales_emb[:,:3])
-        #scales = scales_emb[:,:3]*mask + ds
-        
-        
         do = self.opacity_deform(hidden) 
-        #do = 0.5 * torch.tanh(do_raw)   # 残差范围 (-0.5, 0.5)
-
-        #opacity = torch.zeros_like(opacity_emb[:,:1])
-        #opacity = opacity_emb[:,:1]*mask + do
-        
-
         dshs = self.shs_deform(hidden).reshape([pts_emb.shape[0],16,3])
-        # shs = torch.zeros_like(shs_emb)
-        #shs = shs_emb*mask.unsqueeze(-1) + dshs
 
         return dx, ds, dr, do, dshs
     

@@ -48,7 +48,8 @@ class Scene:
         self.args=args
         #SUMO 初始化background字典
         self.bg_image_dict={}
-        self.loadMultiFrameNerfSyntheticInfo(args, shuffle)
+        # self.loadMultiFrameNerfSyntheticInfo(args, shuffle)
+        self.loadMultiFrameSceneInfo(args,shuffle)
 
 
     # def loadOneFrameSceneInfo(self,args,shuffle=True):
