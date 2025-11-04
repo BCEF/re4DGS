@@ -58,7 +58,7 @@ class ModelParams(ParamGroup):
         self.eval = False
 
         #SUMO
-        self.use_background_image=True
+        self.use_background_image=False
         self._background="bg"
         self.use_init_ply=True
         self.init_ply_path=""
@@ -139,7 +139,7 @@ class ModelHiddenParams(ParamGroup):
         self.no_ds=False # cancel the deformation of Gaussians' scaling
         self.no_dr=False # cancel the deformation of Gaussians' rotations
         self.no_do=True # cancel the deformation of Gaussians' opacity
-        self.no_dshs=True # cancel the deformation of SH colors.
+        self.no_dshs=False # cancel the deformation of SH colors.
         self.apply_rotation=False
 
         

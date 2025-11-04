@@ -467,6 +467,9 @@ class GaussianModel:
         self.max_radii2D = self.max_radii2D[valid_points_mask]
         self.tmp_radii = self.tmp_radii[valid_points_mask]
 
+        #SUMO
+        self.set_base_xyz()
+
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -514,6 +517,9 @@ class GaussianModel:
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+
+        #SUMO
+        self.set_base_xyz()
 
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
         n_init_points = self.get_xyz.shape[0]
@@ -599,10 +605,10 @@ class GaussianModel:
         time=torch.tensor(t).to(self._xyz.device).repeat(self._xyz.shape[0],1)
         
 
-        if self.base_xyz is None:
-            temp_xyz=self.compute_deformed_gaussian(deformer_path)
-        else:
-            temp_xyz,temp_rot,temp_deformer=self.get_deformed_gaussians(deformer_path)
+        # if self.base_xyz is None:
+        #     temp_xyz=self.compute_deformed_gaussian(deformer_path)
+        # else:
+        temp_xyz,temp_rot,temp_deformer=self.get_deformed_gaussians(deformer_path)
         
         
         dx,ds,dr,do,dshs=self._deformation(self._xyz,
@@ -630,7 +636,7 @@ class GaussianModel:
     def get_deformed_gaussians(self,deformer_path):
         if self.dg is None:
             raise NameError("self.dg not initialize!")
-        if deformer_path not in self.deformed_gaussian_xyz:# or self._xyz.shape[0]!=self.deformed_gaussian_xyz[deformer_path].shape[0]:
+        if deformer_path not in self.deformed_gaussian_xyz:
             transforms=DeformationTransforms()
             transforms.load(deformer_path)
             

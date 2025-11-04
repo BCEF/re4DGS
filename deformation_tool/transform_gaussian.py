@@ -268,7 +268,7 @@ def apply_deformation_to_gaussians_full(dg, gaussian, transforms):
     import time
     
     start_time = time.time()
-    print("开始应用变形...")
+    # print("开始应用变形...")
     
     # 创建结果字典，复制输入高斯数据
     deformed_gaussian = {key: value.copy() for key, value in gaussian.items()}
@@ -284,11 +284,11 @@ def apply_deformation_to_gaussians_full(dg, gaussian, transforms):
     print(f"处理 {point_count} 个高斯点...")
     
     # 1. 使用KD树加速最近点查找
-    print("构建KD树...")
+    # print("构建KD树...")
     kdtree = cKDTree(node_positions)
     
     # 2. 预计算控制节点的SVD分解结果
-    print("预计算旋转矩阵...")
+    # print("预计算旋转矩阵...")
     rotation_matrices = []
     rotation_objects = []
     for t in transformations:
@@ -309,7 +309,7 @@ def apply_deformation_to_gaussians_full(dg, gaussian, transforms):
         batch_points = points[start_idx:end_idx]
         batch_size_actual = end_idx - start_idx
         
-        print(f"处理批次 {batch_idx+1}/{num_batches} ({batch_size_actual} 点)...")
+        # print(f"处理批次 {batch_idx+1}/{num_batches} ({batch_size_actual} 点)...")
         
         # 4. 快速查找每个点的影响节点 (半径查询)
         influence_indices = kdtree.query_ball_point(batch_points, influence_radius)
@@ -324,7 +324,7 @@ def apply_deformation_to_gaussians_full(dg, gaussian, transforms):
             if len(indices) > 0:
                 points_to_process.append(i)
         
-        print(f"  批次中有 {len(points_to_process)}/{batch_size_actual} 点需要处理")
+        # print(f"  批次中有 {len(points_to_process)}/{batch_size_actual} 点需要处理")
         
         # 6. 只处理有影响节点的点
         for local_idx in points_to_process:
@@ -392,7 +392,7 @@ def apply_deformation_to_gaussians_full(dg, gaussian, transforms):
         deformed_gaussian['rotations'][start_idx:end_idx] = batch_rotations
         
         batch_time = time.time() - batch_start
-        print(f"  批次处理完成，耗时: {batch_time:.2f}秒")
+        # print(f"  批次处理完成，耗时: {batch_time:.2f}秒")
     
     total_time = time.time() - start_time
     print(f"全部处理完成 - 总耗时: {total_time:.2f}秒")

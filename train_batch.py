@@ -45,7 +45,7 @@ except:
 
 import cv2
 import matplotlib.pyplot as plt
-
+import time
 
 def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations, checkpoint,debug_from):
 
@@ -155,17 +155,19 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                 if (local_iteration - 1) == debug_from:
                     pipe.debug = True
 
+                st=time.time()
                 #SUMO
                 if dataset.use_background_image and os.path.exists(viewpoint_cam.bg_path):
                     bg=scene.get_background_image(viewpoint_cam)
-
+                print(f'A {time.time()-st}')
                 #SUMO
                 gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
-
+                print(f'B {time.time()-st}')
 
                 render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp)
                 image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
+                print(f'C {time.time()-st}')
                 #保存缓冲
                 if iteration % 500 == 1:
                     image_to_save =image.permute(1, 2, 0).detach().cpu().numpy()
@@ -202,13 +204,16 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                     Ll1depth = Ll1depth.item()
                 else:
                     Ll1depth = 0
-
+                print(f'D {time.time()-st}')
                 #SUMO
                 tv_loss = gaussians.compute_regulation(hyper.time_smoothness_weight, hyper.l1_time_planes, hyper.plane_tv_weight)
                 loss += tv_loss
+
+                print(f'E {time.time()-st}')
+
                 loss.backward()
 
-                
+                print(f'F {time.time()-st}')
 
                 with torch.no_grad():
                     ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
@@ -237,7 +242,27 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                     #     if global_iteration > opt.densify_from_iter and global_iteration % opt.densification_interval == 0:# and gaussians.get_xyz.shape[0]<360000:
                     #         size_threshold = 20 if global_iteration > opt.opacity_reset_interval else None
                     #         gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
-                    #         gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
+
+                    #         current_point_count = gaussians._xyz.shape[0]
+                    #         if hasattr(gaussians, 'vertex_deformer') and gaussians.vertex_deformer:
+                    #             keys_to_remove = []
+                    #             for cached_kid, cached_data in gaussians.vertex_deformer.items():
+                    #                 # 检查缓存的点数是否与当前点数匹配
+                    #                 # cached_data.shape[0] 是旧的点数，current_point_count 是新的点数
+                    #                 if cached_data.shape[0] != current_point_count:
+                    #                     keys_to_remove.append(cached_kid)
+                                
+                    #             if keys_to_remove:
+                    #                 print(f'  🔧 清理{len(keys_to_remove)}个不匹配的变形缓存（稠密化后点数变化）')
+                    #                 for kid_to_remove in keys_to_remove:
+                    #                     if kid_to_remove in gaussians.vertex_deformer:
+                    #                         del gaussians.vertex_deformer[kid_to_remove]
+                    #                     if hasattr(gaussians, 'deformed_gaussian_xyz') and kid_to_remove in gaussians.deformed_gaussian_xyz:
+                    #                         del gaussians.deformed_gaussian_xyz[kid_to_remove]
+                    #                     if hasattr(gaussians, 'deformed_gaussian_rot') and kid_to_remove in gaussians.deformed_gaussian_rot:
+                    #                         del gaussians.deformed_gaussian_rot[kid_to_remove]
+                    #                 print(f'  ✅ 缓存已清理，将在下次使用时重建（只重建一次）')
+
                     #         print(f"Gaussian splatting points: {gaussians._xyz.shape[0]}")
                         
                     #     if global_iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and global_iteration == opt.densify_from_iter):
@@ -261,14 +286,14 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                             gaussians.optimizer.step()
                             gaussians.optimizer.zero_grad(set_to_none = True)
 
-                    if (local_iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and local_iteration == opt.densify_from_iter)) and local_iteration<batch_end_iter-500:
-                            gaussians.reset_opacity()
+
                             
                     # 使用全局iteration进行检查点保存
                     if (global_iteration in checkpoint_iterations):
                         print(f"\n[GLOBAL ITER {global_iteration}] Saving Checkpoint (Cycle {cycle+1}, Batch {batch_idx+1}, Local Iter {local_iteration})")
                         torch.save((gaussians.capture(), global_iteration), scene.model_path + "/chkpnt" + str(global_iteration) + ".pth")
-            
+
+                    print(f'G {time.time()-st}')
             scene.save(global_iteration+viewpoint_cam.kid)
             scene.clearCameras(dataset.rscale)
             torch.save((gaussians.capture(), global_iteration), scene.model_path + "/chkpnt" + str(global_iteration) + ".pth")
