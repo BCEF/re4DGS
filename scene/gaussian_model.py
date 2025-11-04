@@ -21,7 +21,8 @@ from utils.sh_utils import RGB2SH
 from simple_knn._C import distCUDA2
 from utils.graphics_utils import BasicPointCloud
 from utils.general_utils import strip_symmetric, build_scaling_rotation
-
+from deformation_tool.deformation_utils import get_deformation_info_fixed_influences
+from utils.general_utils import build_quaternion
 try:
     from diff_gaussian_rasterization import SparseGaussianAdam
 except:
@@ -31,6 +32,7 @@ except:
 # from scene.deformation import deform_network
 from deformation_tool import DeformationGraph,DeformationTransforms,apply_deformation_to_gaussians2,apply_deformation_to_gaussians_full
 from scene.deformation import Deformation
+from scene.rotation_utils import rotation_6d_to_quaternion,quaternion_to_rotation_6d
 class GaussianModel:
 
     def setup_functions(self):
@@ -69,6 +71,7 @@ class GaussianModel:
         self.spatial_lr_scale = 0
 
         #SUMO
+        self.influ_nums=5
         # self._deformation = deform_network(args)
         self._deformation=Deformation()
         self.deformed_xyz=torch.empty(0)
@@ -80,7 +83,7 @@ class GaussianModel:
         self.bg_image_dict={}
         self.deformed_gaussian_xyz={}
         self.deformed_gaussian_rot={}
-        # self.deformation_graph=None
+        self.vertex_deformer={}
         self.dg=None
         self.base_xyz=None
         self.base_quat=None
@@ -599,13 +602,16 @@ class GaussianModel:
         if self.base_xyz is None:
             temp_xyz=self.compute_deformed_gaussian(deformer_path)
         else:
-            temp_xyz,temp_rot=self.get_deformed_gaussians(deformer_path)
+            temp_xyz,temp_rot,temp_deformer=self.get_deformed_gaussians(deformer_path)
+        
         
         dx,ds,dr,do,dshs=self._deformation(self._xyz,
+                                            temp_deformer,
                                             time)
         self.deformed_xyz=temp_xyz+dx
         self.deformed_scl=self._scaling+ds
-        self.deformed_rot=temp_rot+dr
+        self.deformed_rot=rotation_6d_to_quaternion(temp_rot+dr)
+        
         self.deformed_opa=self._opacity+do
         self.deformed_shs=self.get_features+dshs
     
@@ -627,17 +633,24 @@ class GaussianModel:
         if deformer_path not in self.deformed_gaussian_xyz:# or self._xyz.shape[0]!=self.deformed_gaussian_xyz[deformer_path].shape[0]:
             transforms=DeformationTransforms()
             transforms.load(deformer_path)
-            # deformed_points=apply_deformation_to_gaussians2(self.dg,self.base_xyz.cpu().numpy(),transforms)
-            # deformed_points=torch.as_tensor(deformed_points).to(self._xyz.device)
+            
+            batch_size=self._xyz.shape[0]
+            result=get_deformation_info_fixed_influences(self.dg,self.base_xyz.detach().cpu().clone().numpy(),transforms,self.influ_nums,'inverse_distance')
+            weights=torch.as_tensor(np.array(result['weights']),dtype=torch.float32).to('cuda')
+            RT=torch.as_tensor(np.array(result['RT']),dtype=torch.float32).to('cpu')
+            quaternions, translations = build_quaternion(RT[..., :3, :3]), RT[..., :3, 3]
+            self.vertex_deformer[deformer_path]=torch.cat([weights.view(batch_size, -1), quaternions.to('cuda').view(batch_size, -1), translations.to('cuda').reshape(batch_size, -1)], dim=-1)
+
 
             input_gs={"xyz":self.base_xyz.cpu().numpy(),"rotations":self.base_quat.cpu().numpy()}
             deformed_gaussian=apply_deformation_to_gaussians_full(self.dg,input_gs,transforms)
             deformed_points=torch.as_tensor(deformed_gaussian["xyz"]).to(self._xyz.device)
             deformed_rots=torch.as_tensor(deformed_gaussian["rotations"]).to(self._xyz.device)
+            deformed_rots=quaternion_to_rotation_6d(deformed_rots)
             self.deformed_gaussian_xyz[deformer_path]=deformed_points
             self.deformed_gaussian_rot[deformer_path]=deformed_rots
             
-        return self.deformed_gaussian_xyz[deformer_path],self.deformed_gaussian_rot[deformer_path]
+        return self.deformed_gaussian_xyz[deformer_path],self.deformed_gaussian_rot[deformer_path],self.vertex_deformer[deformer_path]
     
     def compute_deformed_gaussian(self,deformer_path):
         transforms=DeformationTransforms()

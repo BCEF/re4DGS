@@ -157,3 +157,68 @@ def batch_quaternion_multiply(q1, q2):
     norm_q3 = q3 / torch.norm(q3, dim=1, keepdim=True)
     
     return norm_q3
+
+def build_quaternion(R):
+    """
+    将批量旋转矩阵转换为四元数 (支持任意批量维度)
+    
+    输入:
+        R: 形状为 (..., 3, 3) 的旋转矩阵张量
+    
+    输出:
+        q: 形状为 (..., 4) 的四元数张量 [w, x, y, z]
+    """
+    # 保存原始形状并展平
+    original_shape = R.shape[:-2]
+    R_flat = R.reshape(-1, 3, 3)
+    batch_size = R_flat.size(0)
+    
+    q = torch.zeros((batch_size, 4), device=R.device, dtype=R.dtype)
+    
+    # 计算矩阵的迹
+    trace = R_flat[:, 0, 0] + R_flat[:, 1, 1] + R_flat[:, 2, 2]
+    
+    # 情况1: trace > 0 (最稳定的情况)
+    mask1 = trace > 0
+    if mask1.any():
+        s = torch.sqrt(trace[mask1] + 1.0) * 2  # s = 4 * qw
+        q[mask1, 0] = 0.25 * s  # qw
+        q[mask1, 1] = (R_flat[mask1, 2, 1] - R_flat[mask1, 1, 2]) / s  # qx
+        q[mask1, 2] = (R_flat[mask1, 0, 2] - R_flat[mask1, 2, 0]) / s  # qy
+        q[mask1, 3] = (R_flat[mask1, 1, 0] - R_flat[mask1, 0, 1]) / s  # qz
+    
+    # 情况2: R[0,0] 是最大的对角元素
+    mask2 = (~mask1) & (R_flat[:, 0, 0] > R_flat[:, 1, 1]) & (R_flat[:, 0, 0] > R_flat[:, 2, 2])
+    if mask2.any():
+        s = torch.sqrt(1.0 + R_flat[mask2, 0, 0] - R_flat[mask2, 1, 1] - R_flat[mask2, 2, 2]) * 2
+        q[mask2, 0] = (R_flat[mask2, 2, 1] - R_flat[mask2, 1, 2]) / s  # qw
+        q[mask2, 1] = 0.25 * s  # qx
+        q[mask2, 2] = (R_flat[mask2, 0, 1] + R_flat[mask2, 1, 0]) / s  # qy
+        q[mask2, 3] = (R_flat[mask2, 0, 2] + R_flat[mask2, 2, 0]) / s  # qz
+    
+    # 情况3: R[1,1] 是最大的对角元素
+    mask3 = (~mask1) & (~mask2) & (R_flat[:, 1, 1] > R_flat[:, 2, 2])
+    if mask3.any():
+        s = torch.sqrt(1.0 + R_flat[mask3, 1, 1] - R_flat[mask3, 0, 0] - R_flat[mask3, 2, 2]) * 2
+        q[mask3, 0] = (R_flat[mask3, 0, 2] - R_flat[mask3, 2, 0]) / s  # qw
+        q[mask3, 1] = (R_flat[mask3, 0, 1] + R_flat[mask3, 1, 0]) / s  # qx
+        q[mask3, 2] = 0.25 * s  # qy
+        q[mask3, 3] = (R_flat[mask3, 1, 2] + R_flat[mask3, 2, 1]) / s  # qz
+    
+    # 情况4: R[2,2] 是最大的对角元素
+    mask4 = (~mask1) & (~mask2) & (~mask3)
+    if mask4.any():
+        s = torch.sqrt(1.0 + R_flat[mask4, 2, 2] - R_flat[mask4, 0, 0] - R_flat[mask4, 1, 1]) * 2
+        q[mask4, 0] = (R_flat[mask4, 1, 0] - R_flat[mask4, 0, 1]) / s  # qw
+        q[mask4, 1] = (R_flat[mask4, 0, 2] + R_flat[mask4, 2, 0]) / s  # qx
+        q[mask4, 2] = (R_flat[mask4, 1, 2] + R_flat[mask4, 2, 1]) / s  # qy
+        q[mask4, 3] = 0.25 * s  # qz
+    
+    # 确保四元数的实部为正（标准化约定）
+    negative_w = q[:, 0] < 0
+    q[negative_w] = -q[negative_w]
+    
+    # 恢复原始形状
+    q = q.reshape(*original_shape, 4)
+    
+    return q

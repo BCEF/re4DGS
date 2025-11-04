@@ -114,3 +114,59 @@ def rotation_matrix_to_quaternion(R: torch.Tensor) -> torch.Tensor:
     q = F.normalize(q, p=2, dim=-1)
     
     return q
+
+def quaternion_to_rotation_6d(q: torch.Tensor) -> torch.Tensor:
+    """
+    四元数 -> 6D连续旋转表示
+    
+    参数:
+        q: (..., 4) 四元数 [w, x, y, z]
+        
+    返回:
+        d6: (..., 6) 6D旋转表示 (旋转矩阵的前两列展平)
+    """
+    # 先转为旋转矩阵
+    R = quaternion_to_rotation_matrix(q)  # (..., 3, 3)
+    
+    # 取前两列并展平
+    d6 = torch.cat([R[..., :, 0], R[..., :, 1]], dim=-1)  # (..., 6)
+    
+    return d6
+
+
+def quaternion_to_rotation_matrix(q: torch.Tensor) -> torch.Tensor:
+    """
+    四元数 -> 旋转矩阵
+    
+    参数:
+        q: (..., 4) 四元数 [w, x, y, z]
+        
+    返回:
+        R: (..., 3, 3) 旋转矩阵
+    """
+    # 归一化四元数（保险）
+    q = F.normalize(q, p=2, dim=-1)
+    
+    w, x, y, z = q[..., 0], q[..., 1], q[..., 2], q[..., 3]
+    
+    # 计算旋转矩阵的9个元素
+    R00 = 1 - 2*(y*y + z*z)
+    R01 = 2*(x*y - w*z)
+    R02 = 2*(x*z + w*y)
+    
+    R10 = 2*(x*y + w*z)
+    R11 = 1 - 2*(x*x + z*z)
+    R12 = 2*(y*z - w*x)
+    
+    R20 = 2*(x*z - w*y)
+    R21 = 2*(y*z + w*x)
+    R22 = 1 - 2*(x*x + y*y)
+    
+    # 组装成矩阵
+    R = torch.stack([
+        torch.stack([R00, R01, R02], dim=-1),
+        torch.stack([R10, R11, R12], dim=-1),
+        torch.stack([R20, R21, R22], dim=-1)
+    ], dim=-2)
+    
+    return R
