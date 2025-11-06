@@ -230,7 +230,7 @@ class GaussianModel:
 
         #SUMO
         self._deformation = self._deformation.to("cuda") 
-        self.canonical_gaussian_point_num=self.get_xyz.shape[0]
+        # self.canonical_gaussian_point_num=self.get_xyz.shape[0]
 
     def training_setup(self, training_args):
         self.percent_dense = training_args.percent_dense
@@ -409,7 +409,7 @@ class GaussianModel:
         self.tmp_radii = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
         self._deformation = self._deformation.to("cuda") 
-        self.canonical_gaussian_point_num=self.get_xyz.shape[0]
+        # self.canonical_gaussian_point_num=self.get_xyz.shape[0]
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
@@ -548,7 +548,7 @@ class GaussianModel:
         self.prune_points(prune_filter)
 
         #SUMO
-        self.canonical_gaussian_point_num-=selected_pts_mask.sum()
+        # self.canonical_gaussian_point_num-=selected_pts_mask.sum()
 
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
         # Extract points that satisfy the gradient condition
@@ -586,7 +586,7 @@ class GaussianModel:
         self.prune_points(prune_mask)
         print(f"Gaussian prune: {self._xyz.shape[0]}")
          #SUMO
-        self.canonical_gaussian_point_num-=prune_mask.sum()
+        # self.canonical_gaussian_point_num-=prune_mask.sum()
 
         tmp_radii = self.tmp_radii
         self.tmp_radii = None
@@ -702,41 +702,41 @@ class GaussianModel:
 
 
     #SUMO
-    def zero_gradients_and_optimizer_states(self):
-        """
-        将前self.canonical_gaussian_point_num个点的梯度和优化器状态清零
-        """
-        if self.canonical_gaussian_point_num <= 0:
-            return
+    # def zero_gradients_and_optimizer_states(self):
+    #     """
+    #     将前self.canonical_gaussian_point_num个点的梯度和优化器状态清零
+    #     """
+    #     if self.canonical_gaussian_point_num <= 0:
+    #         return
         
-        num = self.canonical_gaussian_point_num
+    #     num = self.canonical_gaussian_point_num
         
-        for group in self.optimizer.param_groups:
-            # 跳过特殊的参数组
-            if group.get("name", "") == "deformation":
-                continue
-            if group.get("name", "") == "grid":
-                continue
+    #     for group in self.optimizer.param_groups:
+    #         # 跳过特殊的参数组
+    #         if group.get("name", "") == "deformation":
+    #             continue
+    #         if group.get("name", "") == "grid":
+    #             continue
             
-            param = group['params'][0]
+    #         param = group['params'][0]
             
-            # 检查参数是否有足够的元素
-            if param.shape[0] < num:
-                continue
+    #         # 检查参数是否有足够的元素
+    #         if param.shape[0] < num:
+    #             continue
             
-            with torch.no_grad():
-                # 1. 清零前num个点的梯度
-                if param.grad is not None:
-                    # param.grad[:num] = 0
-                    param.grad[:num].zero_()
+    #         with torch.no_grad():
+    #             # 1. 清零前num个点的梯度
+    #             if param.grad is not None:
+    #                 # param.grad[:num] = 0
+    #                 param.grad[:num].zero_()
                 
-                # 2. 清零前num个点的优化器状态
-                stored_state = self.optimizer.state.get(param, None)
-                if stored_state is not None:
-                    if "exp_avg" in stored_state:
-                        stored_state["exp_avg"][:num] = 0
-                    if "exp_avg_sq" in stored_state:
-                        stored_state["exp_avg_sq"][:num] = 0
+    #             # 2. 清零前num个点的优化器状态
+    #             stored_state = self.optimizer.state.get(param, None)
+    #             if stored_state is not None:
+    #                 if "exp_avg" in stored_state:
+    #                     stored_state["exp_avg"][:num] = 0
+    #                 if "exp_avg_sq" in stored_state:
+    #                     stored_state["exp_avg_sq"][:num] = 0
         
         # WDD
         # 冻结前n个高斯点的xyz梯度
@@ -754,40 +754,40 @@ class GaussianModel:
         #         if "max_exp_avg_sq" in st: st["max_exp_avg_sq"][:k] = 0  # 仅 AMSGrad 时存在
 
 
-    def verify_canonical_frozen(self):
-        """验证前canonical_gaussian_point_num个点是否真的没有被优化"""
-        if self.canonical_gaussian_point_num <= 0:
-            return
+    # def verify_canonical_frozen(self):
+    #     """验证前canonical_gaussian_point_num个点是否真的没有被优化"""
+    #     if self.canonical_gaussian_point_num <= 0:
+    #         return
         
-        num = 10
+    #     num = 10
         
-        if not hasattr(self, '_initial_canonical_params'):
-            # 第一次调用，保存初始值
-            self._initial_canonical_params = {}
-            for group in self.optimizer.param_groups:
-                if group.get("name", "") in ["deformation", "grid"]:
-                    continue
-                param_name = group.get("name", "")
-                param = group['params'][0]
-                if param.shape[0] >= num:
-                    with torch.no_grad():
-                        self._initial_canonical_params[param_name] = param[:num].clone()
-            print(f"Saved initial canonical parameters (first {num} points)")
-            return
+    #     if not hasattr(self, '_initial_canonical_params'):
+    #         # 第一次调用，保存初始值
+    #         self._initial_canonical_params = {}
+    #         for group in self.optimizer.param_groups:
+    #             if group.get("name", "") in ["deformation", "grid"]:
+    #                 continue
+    #             param_name = group.get("name", "")
+    #             param = group['params'][0]
+    #             if param.shape[0] >= num:
+    #                 with torch.no_grad():
+    #                     self._initial_canonical_params[param_name] = param[:num].clone()
+    #         print(f"Saved initial canonical parameters (first {num} points)")
+    #         return
         
-        # 检查是否有变化
-        print(f"\n=== Verifying Canonical Points (first {num}) ===")
-        for group in self.optimizer.param_groups:
-            if group.get("name", "") in ["deformation", "grid"]:
-                continue
+    #     # 检查是否有变化
+    #     print(f"\n=== Verifying Canonical Points (first {num}) ===")
+    #     for group in self.optimizer.param_groups:
+    #         if group.get("name", "") in ["deformation", "grid"]:
+    #             continue
             
-            param_name = group.get("name", "")
-            param = group['params'][0]
+    #         param_name = group.get("name", "")
+    #         param = group['params'][0]
             
-            if param_name in self._initial_canonical_params:
-                with torch.no_grad():
-                    diff = (param[:num] - self._initial_canonical_params[param_name]).abs().max()
-                    print(f"{param_name:15s}: max change = {diff.item():.2e}")
+    #         if param_name in self._initial_canonical_params:
+    #             with torch.no_grad():
+    #                 diff = (param[:num] - self._initial_canonical_params[param_name]).abs().max()
+    #                 print(f"{param_name:15s}: max change = {diff.item():.2e}")
         
    
 
