@@ -139,7 +139,7 @@ class ModelHiddenParams(ParamGroup):
         self.no_ds=False # cancel the deformation of Gaussians' scaling
         self.no_dr=False # cancel the deformation of Gaussians' rotations
         self.no_do=True # cancel the deformation of Gaussians' opacity
-        self.no_dshs=False # cancel the deformation of SH colors.
+        self.no_dshs=True # cancel the deformation of SH colors.
         self.apply_rotation=False
 
         

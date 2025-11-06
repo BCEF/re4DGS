@@ -71,6 +71,7 @@ class GaussianModel:
         self.spatial_lr_scale = 0
 
         #SUMO
+        self.args=args
         self.influ_nums=5
         self._deformation=Deformation()
         self.deformed_xyz=torch.empty(0)
@@ -94,6 +95,10 @@ class GaussianModel:
         # ✅ 当前使用的deformer_path，用于densify时的逆变换
         self.current_deformer_path = None
         
+        # ✅ 新增：时间相关参数
+        self._time_center = torch.empty(0)      # μₜ: 高斯出现的中心时间
+        self._time_duration = torch.empty(0)    # s: 持续时间/带宽
+        
         self.setup_functions()
 
     def capture(self):
@@ -105,6 +110,8 @@ class GaussianModel:
             self._scaling,
             self._rotation,
             self._opacity,
+            self._time_center,      # ✅ 新增
+            self._time_duration,    # ✅ 新增
             self.max_radii2D,
             self.xyz_gradient_accum,
             self.denom,
@@ -124,6 +131,8 @@ class GaussianModel:
         self._scaling, 
         self._rotation, 
         self._opacity,
+        self._time_center,       # ✅ 新增
+        self._time_duration,     # ✅ 新增
         self.max_radii2D, 
         xyz_gradient_accum, 
         denom,
@@ -192,6 +201,17 @@ class GaussianModel:
     def get_exposure(self):
         return self._exposure
 
+    # ✅ 新增：时间参数的property
+    @property
+    def get_time_center(self):
+        """获取时间中心（归一化到 [0, 1]）"""
+        return torch.sigmoid(self._time_center)
+    
+    @property
+    def get_time_duration(self):
+        """获取时间持续时间（确保为正）"""
+        return torch.exp(self._time_duration)
+
     def get_exposure_from_name(self, image_name):
         if self.pretrained_exposures is None:
             return self._exposure[self.exposure_mapping[image_name]]
@@ -228,6 +248,18 @@ class GaussianModel:
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
         self._opacity = nn.Parameter(opacities.requires_grad_(True))
+        
+        # ✅ 新增：初始化时间参数
+        # 默认所有点在整个时间段内可见
+        num_points = fused_point_cloud.shape[0]
+        # 使用 sigmoid 的逆函数初始化，使得 sigmoid(0) = 0.5
+        time_centers = torch.zeros((num_points, 1), dtype=torch.float, device="cuda")  # sigmoid(0) = 0.5
+        # 使用 log 的逆函数初始化，使得 exp(log(3.0)) = 3.0 (大带宽=始终可见)
+        time_durations = torch.log(torch.tensor(3.0)) * torch.ones((num_points, 1), dtype=torch.float, device="cuda")
+        
+        self._time_center = nn.Parameter(time_centers.requires_grad_(True))
+        self._time_duration = nn.Parameter(time_durations.requires_grad_(True))
+        
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         self.exposure_mapping = {cam_info.image_name: idx for idx, cam_info in enumerate(cam_infos)}
         self.pretrained_exposures = None
@@ -248,6 +280,9 @@ class GaussianModel:
             {'params': [self._opacity], 'lr': training_args.opacity_lr, "name": "opacity"},
             {'params': [self._scaling], 'lr': training_args.scaling_lr, "name": "scaling"},
             {'params': [self._rotation], 'lr': training_args.rotation_lr, "name": "rotation"},
+            # ✅ 新增：时间参数的优化器组
+            {'params': [self._time_center], 'lr': training_args.position_lr_init * self.spatial_lr_scale * 0.1, "name": "time_center"},
+            {'params': [self._time_duration], 'lr': training_args.position_lr_init * self.spatial_lr_scale * 0.05, "name": "time_duration"},
             {'params': list(self._deformation.get_mlp_parameters()), 'lr': training_args.deformation_lr_init * self.spatial_lr_scale, "name": "deformation"},
             {'params': list(self._deformation.get_grid_parameters()), 'lr': training_args.grid_lr_init * self.spatial_lr_scale, "name": "grid"},
         ]
@@ -311,7 +346,11 @@ class GaussianModel:
             l.append('scale_{}'.format(i))
         for i in range(self._rotation.shape[1]):
             l.append('rot_{}'.format(i))
+        # ✅ 新增：时间参数
+        l.append('time_center')
+        l.append('time_duration')
         return l
+
 
     # def save_ply(self, path):
     #     mkdir_p(os.path.dirname(path))
@@ -324,14 +363,20 @@ class GaussianModel:
     #     scale = self.deformed_scl.detach().cpu().numpy()
     #     rotation = self.deformed_rot.detach().cpu().numpy()
 
+    #     time_center = self.get_time_center.detach().cpu().numpy()
+    #     time_duration = self.get_time_duration.detach().cpu().numpy()
+
     #     dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
     #     elements = np.empty(xyz.shape[0], dtype=dtype_full)
-    #     attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+    #     # attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+    #     attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, 
+    #                                 time_center, time_duration), axis=1)
     #     elements[:] = list(map(tuple, attributes))
     #     el = PlyElement.describe(elements, 'vertex')
     #     PlyData([el]).write(path)
     
+
     def save_ply(self, path):
         mkdir_p(os.path.dirname(path))
 
@@ -339,9 +384,7 @@ class GaussianModel:
         normals = np.zeros_like(xyz)
 
         # ✅ 从 deformed_shs 提取特征
-        # deformed_shs shape: [N, (max_sh_degree+1)^2, 3]
-        # 对于 max_sh_degree=3: [N, 16, 3]
-        deformed_shs_np = self.deformed_shs.detach().cpu().numpy()
+        deformed_shs_np = self.deformed_shs.detach()
 
         # 分离 DC 部分 (第0个SH系数)
         f_dc = deformed_shs_np[:, 0:1, :]  # [N, 1, 3]
@@ -349,25 +392,33 @@ class GaussianModel:
         # 分离 rest 部分 (剩余的SH系数)
         f_rest = deformed_shs_np[:, 1:, :]  # [N, 15, 3]
 
-        # ✅ 修复：使用 NumPy 的 reshape 代替 flatten(start_dim=1)
-        # 从 [N, 1, 3] -> [N, 3, 1] -> [N, 3]
-        f_dc = f_dc.transpose(0, 2, 1).reshape(f_dc.shape[0], -1)
+        f_dc=f_dc.transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        f_rest = f_rest.transpose(1, 2).flatten(start_dim=1).contiguous().cpu().numpy()
+        # # ✅ 使用 NumPy 的 reshape 代替 flatten(start_dim=1)
+        # # 从 [N, 1, 3] -> [N, 3, 1] -> [N, 3]
+        # f_dc = f_dc.transpose(0, 2, 1).reshape(f_dc.shape[0], -1)
 
-        # 从 [N, 15, 3] -> [N, 3, 15] -> [N, 45]
-        f_rest = f_rest.transpose(0, 2, 1).reshape(f_rest.shape[0], -1)
+        # # 从 [N, 15, 3] -> [N, 3, 15] -> [N, 45]
+        # f_rest = f_rest.transpose(0, 2, 1).reshape(f_rest.shape[0], -1)
 
         opacities = self.deformed_opa.detach().cpu().numpy()
         scale = self.deformed_scl.detach().cpu().numpy()
         rotation = self.deformed_rot.detach().cpu().numpy()
+        
+        # ✅ 新增：保存时间参数（使用激活后的值）
+        time_center = self.get_time_center.detach().cpu().numpy()
+        time_duration = self.get_time_duration.detach().cpu().numpy()
 
         dtype_full = [(attribute, 'f4') for attribute in self.construct_list_of_attributes()]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation), axis=1)
+        # ✅ 修改：添加时间参数到attributes
+        attributes = np.concatenate((xyz, normals, f_dc, f_rest, opacities, scale, rotation, 
+                                    time_center, time_duration), axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
-
+    
     def reset_opacity(self):
         opacities_new = self.inverse_opacity_activation(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
@@ -416,19 +467,51 @@ class GaussianModel:
         for idx, attr_name in enumerate(rot_names):
             rots[:, idx] = np.asarray(plydata.elements[0][attr_name])
 
+        # ✅ 新增：加载时间参数（如果存在）
+        try:
+            time_centers = np.asarray(plydata.elements[0]["time_center"])[..., np.newaxis]
+            time_durations = np.asarray(plydata.elements[0]["time_duration"])[..., np.newaxis]
+            has_time_params = True
+            print("Time parameters loaded from ply file")
+        except:
+            # 如果文件中没有时间参数，使用默认值
+            print("No time parameters found in ply file, using defaults")
+            num_points = xyz.shape[0]
+            time_centers = np.ones((num_points, 1)) * 0.5
+            time_durations = np.ones((num_points, 1)) * 3.0
+            has_time_params = False
+
         self._xyz = nn.Parameter(torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True))
         self._features_dc = nn.Parameter(torch.tensor(features_dc, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._features_rest = nn.Parameter(torch.tensor(features_extra, dtype=torch.float, device="cuda").transpose(1, 2).contiguous().requires_grad_(True))
         self._opacity = nn.Parameter(torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(True))
         self._scaling = nn.Parameter(torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True))
         self._rotation = nn.Parameter(torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True))
+        
+        # ✅ 新增：加载时间参数
+        # 使用逆激活函数（sigmoid的逆和log）
+        if has_time_params:
+            self._time_center = nn.Parameter(
+                inverse_sigmoid(torch.tensor(time_centers, dtype=torch.float, device="cuda")).requires_grad_(True)
+            )
+            self._time_duration = nn.Parameter(
+                torch.log(torch.tensor(time_durations, dtype=torch.float, device="cuda")).requires_grad_(True)
+            )
+        else:
+            # 默认值：sigmoid(0)=0.5, exp(log(3.0))=3.0
+            self._time_center = nn.Parameter(
+                torch.zeros((xyz.shape[0], 1), dtype=torch.float, device="cuda").requires_grad_(True)
+            )
+            self._time_duration = nn.Parameter(
+                torch.log(torch.tensor(3.0)) * torch.ones((xyz.shape[0], 1), dtype=torch.float, device="cuda").requires_grad_(True)
+            )
 
         self.active_sh_degree = self.max_sh_degree
 
         self.base_xyz=self._xyz.detach().clone()
         self.base_quat=self._rotation.detach().clone()
 
-    def fixup_params(self,cam_infos,spatial_lr_scale : float):
+    def fixup_params(self, cam_infos, spatial_lr_scale: float):
         self.spatial_lr_scale = spatial_lr_scale
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
         self.exposure_mapping = {cam_info.image_name: idx for idx, cam_info in enumerate(cam_infos)}
@@ -436,7 +519,18 @@ class GaussianModel:
         exposure = torch.eye(3, 4, device="cuda")[None].repeat(len(cam_infos), 1, 1)
         self._exposure = nn.Parameter(exposure.requires_grad_(True))
         self.tmp_radii = torch.zeros((self.get_xyz.shape[0]), device="cuda")
-        self._deformation = self._deformation.to("cuda") 
+        self._deformation = self._deformation.to("cuda")
+        
+        # ✅ 新增：如果时间参数未初始化，使用默认值
+        if self._time_center.numel() == 0:
+            num_points = self.get_xyz.shape[0]
+            self._time_center = nn.Parameter(
+                torch.zeros((num_points, 1), dtype=torch.float, device="cuda").requires_grad_(True)
+            )
+            self._time_duration = nn.Parameter(
+                torch.log(torch.tensor(3.0)) * torch.ones((num_points, 1), dtype=torch.float, device="cuda").requires_grad_(True)
+            )
+            print("Initialized time parameters with defaults")
 
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
@@ -486,6 +580,8 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
+        self._time_center = optimizable_tensors["time_center"]        # ✅ 新增
+        self._time_duration = optimizable_tensors["time_duration"]    # ✅ 新增
 
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
         self.denom = self.denom[valid_points_mask]
@@ -520,13 +616,19 @@ class GaussianModel:
 
         return optimizable_tensors
 
-    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii):
-        d = {"xyz": new_xyz,
-        "f_dc": new_features_dc,
-        "f_rest": new_features_rest,
-        "opacity": new_opacities,
-        "scaling" : new_scaling,
-        "rotation" : new_rotation}
+    def densification_postfix(self, new_xyz, new_features_dc, new_features_rest, new_opacities, 
+                             new_scaling, new_rotation, new_tmp_radii,
+                             new_time_center, new_time_duration):  # ✅ 新增参数
+        d = {
+            "xyz": new_xyz,
+            "f_dc": new_features_dc,
+            "f_rest": new_features_rest,
+            "opacity": new_opacities,
+            "scaling": new_scaling,
+            "rotation": new_rotation,
+            "time_center": new_time_center,      # ✅ 新增
+            "time_duration": new_time_duration   # ✅ 新增
+        }
 
         optimizable_tensors = self.cat_tensors_to_optimizer(d)
         self._xyz = optimizable_tensors["xyz"]
@@ -535,6 +637,8 @@ class GaussianModel:
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
+        self._time_center = optimizable_tensors["time_center"]        # ✅ 新增
+        self._time_duration = optimizable_tensors["time_duration"]    # ✅ 新增
 
         self.tmp_radii = torch.cat((self.tmp_radii, new_tmp_radii))
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
@@ -608,8 +712,14 @@ class GaussianModel:
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
         new_tmp_radii = self.tmp_radii[selected_pts_mask].repeat(N)
+        
+        # ✅ 新增：继承父点的时间参数
+        new_time_center = self._time_center[selected_pts_mask].repeat(N, 1)
+        new_time_duration = self._time_duration[selected_pts_mask].repeat(N, 1)
 
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, new_scaling, new_rotation, new_tmp_radii)
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacity, 
+                                  new_scaling, new_rotation, new_tmp_radii,
+                                  new_time_center, new_time_duration)
 
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
@@ -628,7 +738,13 @@ class GaussianModel:
         new_rotation = self._rotation[selected_pts_mask]
         new_tmp_radii = self.tmp_radii[selected_pts_mask]
         
-        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation, new_tmp_radii)
+        # ✅ 新增：复制时间参数
+        new_time_center = self._time_center[selected_pts_mask]
+        new_time_duration = self._time_duration[selected_pts_mask]
+        
+        self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, 
+                                  new_scaling, new_rotation, new_tmp_radii,
+                                  new_time_center, new_time_duration)
 
     def densify_and_prune(self, max_grad, min_opacity, extent, max_screen_size, radii):
         grads = self.xyz_gradient_accum / self.denom
@@ -663,8 +779,42 @@ class GaussianModel:
         """保留原接口以兼容旧代码"""
         self._update_base_and_clear_cache()
 
-    # ✅ 修改：update_deformed_gaussians 记录当前deformer_path
+    # ✅ 新增：时间不透明度计算函数
+    def compute_temporal_opacity(self, t):
+        """
+        计算时间调制的不透明度 (论文公式4)
+        σ(t) = exp(-0.5 * ((t - μₜ) / s)²)
+        
+        Args:
+            t: 当前归一化时间 [0, 1]
+        
+        Returns:
+            time_mask: (N, 1) 时间不透明度
+        """
+        # 确保 t 是 tensor
+        if not isinstance(t, torch.Tensor):
+            t = torch.tensor(t, dtype=torch.float32, device=self._time_center.device)
+        
+        # 获取激活后的时间参数
+        time_center = self.get_time_center  # (N, 1) in [0, 1]
+        time_duration = self.get_time_duration  # (N, 1), positive
+        
+        # 计算时间差异
+        time_diff = t - time_center  # (N, 1)
+        
+        # 计算高斯衰减
+        normalized_diff = time_diff / time_duration
+        time_mask = torch.exp(-0.5 * normalized_diff ** 2)
+        
+        return time_mask
+
+    # ✅ 修改：update_deformed_gaussians 记录当前deformer_path并应用时间调制
     def update_deformed_gaussians(self, deformer_path, t):
+        """
+        Args:
+            deformer_path: 变形路径
+            t: 归一化时间 [0, 1]
+        """
         # 记录当前使用的deformer_path，用于densify时的逆变换
         self.current_deformer_path = deformer_path
         
@@ -676,15 +826,75 @@ class GaussianModel:
         self.deformed_xyz = temp_xyz + dx
         self.deformed_scl = self._scaling + ds
         self.deformed_rot = rotation_6d_to_quaternion(temp_rot + dr)
-        self.deformed_opa = self._opacity + do
-        self.deformed_shs = self.get_features + dshs
+        
+        # ✅ 关键修改：应用时间调制
+        # 先计算空间变形后的不透明度（在logit空间）
+        if self.args.no_do:
+            base_opacity_logit=self._opacity
+        else:
+            base_opacity_logit = self._opacity + do
+        
+        # 计算时间mask
+        time_mask = self.compute_temporal_opacity(t)
+        
+        # 最终不透明度 = 空间不透明度 × 时间mask
+        # 在logit空间：logit(p1 * p2) = logit(p1) + log(p2)
+        # 为了数值稳定，添加小的epsilon
+        self.deformed_opa = base_opacity_logit #+ torch.log(time_mask + 1e-8)
+
+        if self.args.no_dshs:
+            self.deformed_shs=self.get_features
+        else:
+            self.deformed_shs = self.get_features + dshs
+    
+    def update_deformed_gaussians_for_render(self, deformer_path, t):
+        """
+        Args:
+            deformer_path: 变形路径
+            t: 归一化时间 [0, 1]
+        """
+        # 记录当前使用的deformer_path，用于densify时的逆变换
+        self.current_deformer_path = deformer_path
+        
+        time = torch.tensor(t).to(self._xyz.device).repeat(self._xyz.shape[0], 1)
+        temp_xyz, temp_rot, temp_deformer = self.get_deformed_gaussians(deformer_path)
+        
+        dx, ds, dr, do, dshs = self._deformation(self._xyz.detach(), temp_deformer, time.detach())
+        
+        self.deformed_xyz = temp_xyz + dx
+        self.deformed_scl = self._scaling.detach() + ds
+        self.deformed_rot = rotation_6d_to_quaternion(temp_rot + dr)
+        
+        # ✅ 关键修改：应用时间调制
+        # 先计算空间变形后的不透明度（在logit空间）
+        if self.args.no_do:
+            base_opacity_logit=self._opacity.detach()
+        else:
+            base_opacity_logit = self._opacity.detach() + do
+        
+        # 计算时间mask
+        time_mask = self.compute_temporal_opacity(t)
+        
+        # 最终不透明度 = 空间不透明度 × 时间mask
+        # 在logit空间：logit(p1 * p2) = logit(p1) + log(p2)
+        # 为了数值稳定，添加小的epsilon
+        self.deformed_opa = base_opacity_logit #+ torch.log(time_mask + 1e-8)
+        
+        if self.args.no_dshs:
+            self.deformed_shs=self.get_features.detach()
+        else:
+            self.deformed_shs = self.get_features.detach() + dshs
     
     def update_deformed_gaussians_step2(self, deformer_path, t):
         self.current_deformer_path = None  # step2不使用变形
         self.deformed_xyz = self._xyz
         self.deformed_scl = self._scaling
         self.deformed_rot = self._rotation
-        self.deformed_opa = self._opacity
+        
+        # ✅ step2 也需要应用时间调制
+        time_mask = self.compute_temporal_opacity(t)
+        self.deformed_opa = self._opacity + torch.log(time_mask + 1e-8)
+        
         self.deformed_shs = self.get_features
 
     def deform_init(self, dg_path):
@@ -823,8 +1033,40 @@ class GaussianModel:
                 total += torch.abs(1 - grids[grid_id]).mean()
         return total
     
-    def compute_regulation(self, time_smoothness_weight, l1_time_planes_weight, plane_tv_weight):
-        return plane_tv_weight * self._plane_regulation() + time_smoothness_weight * self._time_regulation() + l1_time_planes_weight * self._l1_regulation()
+    # ✅ 新增：时间相关的正则化（可选）
+    def _temporal_sparsity_regulation(self):
+        """
+        鼓励时间持续时间的稀疏性
+        较小的duration意味着高斯只在特定时间段可见
+        """
+        # 负对数：鼓励较小的duration值
+        return -torch.mean(torch.log(self.get_time_duration + 1e-8))
+    
+    def _temporal_smoothness_regulation(self):
+        """
+        鼓励相邻点的时间参数相似
+        需要KNN信息，这里提供接口，实际使用时需要传入邻域信息
+        """
+        # 这是一个示例，实际使用需要根据空间邻域计算
+        # 这里返回0，用户可以根据需要实现
+        return torch.tensor(0.0, device=self._time_center.device)
+    
+    def compute_regulation(self, time_smoothness_weight, l1_time_planes_weight, plane_tv_weight,
+                          temporal_sparsity_weight=0.0, temporal_smooth_weight=0.0):
+        """
+        Args:
+            temporal_sparsity_weight: 时间稀疏性权重（鼓励短持续时间）
+            temporal_smooth_weight: 时间平滑性权重（鼓励相邻点时间一致）
+        """
+        base_reg = (plane_tv_weight * self._plane_regulation() + 
+                   time_smoothness_weight * self._time_regulation() + 
+                   l1_time_planes_weight * self._l1_regulation())
+        
+        # ✅ 新增：时间正则化项
+        temporal_reg = (temporal_sparsity_weight * self._temporal_sparsity_regulation() +
+                       temporal_smooth_weight * self._temporal_smoothness_regulation())
+        
+        return base_reg + temporal_reg
 
 
 def compute_plane_smoothness(t):

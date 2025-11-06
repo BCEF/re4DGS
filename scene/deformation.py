@@ -69,7 +69,7 @@ class Deformation(nn.Module):
     # 创建变形的神经网络   
     def create_net(self): 
         
-        grid_out_dim = self.grid.feat_dim+8*5
+        grid_out_dim = self.grid.feat_dim#+8*5
         
     
         # 创建MLP网络
@@ -174,9 +174,9 @@ class Deformation(nn.Module):
     def query_time(self, rays_pts_emb, deformer,time_emb):
         grid_feature = self.grid(rays_pts_emb[:,:3], time_emb[:,:1])
         
-        temp_features=torch.cat((grid_feature,deformer),dim=-1)
+        # grid_feature=torch.cat((grid_feature,deformer),dim=-1)
 
-        hidden = self.feature_out(temp_features)   
+        hidden = self.feature_out(grid_feature)   
         return hidden
      
     

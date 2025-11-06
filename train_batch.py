@@ -271,6 +271,7 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                     # 使用全局iteration检查是否需要保存，避免文件覆盖
                     if (global_iteration in saving_iterations):
                         print(f"\n[GLOBAL ITER {global_iteration}] Saving Gaussians (Cycle {cycle+1}, Batch {batch_idx+1}, Local Iter {local_iteration})")
+                        gaussians.update_deformed_gaussians_for_render(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
                         scene.save(global_iteration+viewpoint_cam.kid)
 
                     if local_iteration < opt.iterations:
@@ -288,12 +289,13 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                             
                     # 使用全局iteration进行检查点保存
                     if (global_iteration in checkpoint_iterations):
+                        gaussians.update_deformed_gaussians_for_render(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
                         print(f"\n[GLOBAL ITER {global_iteration}] Saving Checkpoint (Cycle {cycle+1}, Batch {batch_idx+1}, Local Iter {local_iteration})")
                         torch.save((gaussians.capture(), global_iteration), scene.model_path + "/chkpnt" + str(global_iteration) + ".pth")
 
                     # print(f'G {time.time()-st}')
             
-            gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
+            gaussians.update_deformed_gaussians_for_render(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
             scene.save(global_iteration+viewpoint_cam.kid)
             scene.clearCameras(dataset.rscale)
             torch.save((gaussians.capture(), global_iteration), scene.model_path + "/chkpnt" + str(global_iteration) + ".pth")
@@ -374,7 +376,7 @@ if __name__ == "__main__":
     parser.add_argument('--port', type=int, default=6009)
     parser.add_argument('--debug_from', type=int, default=-1)
     parser.add_argument('--detect_anomaly', action='store_true', default=False)
-    parser.add_argument("--save_iterations", nargs="+", type=int, default=[700,3_000,7_000, 30_000])
+    parser.add_argument("--save_iterations", nargs="+", type=int, default=[300,700,3_000,7_000, 30_000])
     parser.add_argument("--quiet", action="store_true")
     parser.add_argument('--disable_viewer', action='store_true', default=False)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
