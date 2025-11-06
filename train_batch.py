@@ -155,19 +155,19 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                 if (local_iteration - 1) == debug_from:
                     pipe.debug = True
 
-                st=time.time()
+                
                 #SUMO
                 if dataset.use_background_image and os.path.exists(viewpoint_cam.bg_path):
                     bg=scene.get_background_image(viewpoint_cam)
-                print(f'A {time.time()-st}')
+
                 #SUMO
                 gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
-                print(f'B {time.time()-st}')
+
 
                 render_pkg = render(viewpoint_cam, gaussians, pipe, bg, use_trained_exp=dataset.train_test_exp)
                 image, viewspace_point_tensor, visibility_filter, radii = render_pkg["render"], render_pkg["viewspace_points"], render_pkg["visibility_filter"], render_pkg["radii"]
 
-                print(f'C {time.time()-st}')
+
                 #保存缓冲
                 if iteration % 500 == 1:
                     image_to_save =image.permute(1, 2, 0).detach().cpu().numpy()
@@ -204,16 +204,14 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                     Ll1depth = Ll1depth.item()
                 else:
                     Ll1depth = 0
-                print(f'D {time.time()-st}')
+
                 #SUMO
                 tv_loss = gaussians.compute_regulation(hyper.time_smoothness_weight, hyper.l1_time_planes, hyper.plane_tv_weight)
                 loss += tv_loss
 
-                print(f'E {time.time()-st}')
 
                 loss.backward()
 
-                print(f'F {time.time()-st}')
 
                 with torch.no_grad():
                     ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
@@ -293,7 +291,7 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                         print(f"\n[GLOBAL ITER {global_iteration}] Saving Checkpoint (Cycle {cycle+1}, Batch {batch_idx+1}, Local Iter {local_iteration})")
                         torch.save((gaussians.capture(), global_iteration), scene.model_path + "/chkpnt" + str(global_iteration) + ".pth")
 
-                    print(f'G {time.time()-st}')
+                    # print(f'G {time.time()-st}')
             scene.save(global_iteration+viewpoint_cam.kid)
             scene.clearCameras(dataset.rscale)
             torch.save((gaussians.capture(), global_iteration), scene.model_path + "/chkpnt" + str(global_iteration) + ".pth")
