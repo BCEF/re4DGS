@@ -30,7 +30,7 @@ except:
 
 #SUMO
 from deformation_tool import DeformationGraph,DeformationTransforms,apply_deformation_to_gaussians2,apply_deformation_to_gaussians_full
-from scene.deformation import Deformation
+from scene.deformation import Deformation,quat_multiply
 from scene.rotation_utils import rotation_6d_to_quaternion,quaternion_to_rotation_6d
 
 class GaussianModel:
@@ -71,6 +71,7 @@ class GaussianModel:
         self.spatial_lr_scale = 0
 
         #SUMO
+        self.args=args
         self.influ_nums=5
         self._deformation=Deformation()
         self.deformed_xyz=torch.empty(0)
@@ -494,6 +495,7 @@ class GaussianModel:
 
         # ✅ 更新base并清空缓存
         self._update_base_and_clear_cache()
+        self.update_deformed_gaussians_for_render()
 
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
@@ -543,6 +545,7 @@ class GaussianModel:
 
         # ✅ 更新base并清空缓存
         self._update_base_and_clear_cache()
+        self.update_deformed_gaussians_for_render()
 
     # ✅ 新增：清空所有缓存的统一方法
     def _clear_all_caches(self):
@@ -550,9 +553,9 @@ class GaussianModel:
         self.deformed_gaussian_xyz.clear()
         self.deformed_gaussian_rot.clear()
         self.vertex_deformer.clear()
-        self.inverse_deform_transforms.clear()
-        self.current_deformer_path = None
-        print(f"[Cache Clear] Cleared all deformation caches")
+        # self.inverse_deform_transforms.clear()
+        # self.current_deformer_path = None
+        # print(f"[Cache Clear] Cleared all deformation caches")
 
     # ✅ 新增：统一的更新和清理函数
     def _update_base_and_clear_cache(self):
@@ -563,7 +566,7 @@ class GaussianModel:
         # 清空所有缓存
         self._clear_all_caches()
         
-        print(f"[Cache Clear] Updated base_xyz to {self.base_xyz.shape[0]} points and cleared all caches")
+        # print(f"[Cache Clear] Updated base_xyz to {self.base_xyz.shape[0]} points and cleared all caches")
 
     # ✅ 修改：densify_and_split 使用缓存的逆变换
     def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
@@ -572,14 +575,14 @@ class GaussianModel:
         padded_grad[:grads.shape[0]] = grads.squeeze()
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
+                                              torch.max(self.get_render_scaling, dim=1).values > self.percent_dense*scene_extent)
 
         # 在变形空间采样新点
-        stds = self.get_scaling[selected_pts_mask].repeat(N,1)
+        stds = self.get_render_scaling[selected_pts_mask].repeat(N,1)
         means = torch.zeros((stds.size(0), 3), device="cuda")
         samples = torch.normal(mean=means, std=stds)
         rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N,1,1)
-        new_xyz_deformed = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_xyz[selected_pts_mask].repeat(N, 1)
+        new_xyz_deformed = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_render_xyz[selected_pts_mask].repeat(N, 1)
         
         # ✅ 关键修改：使用已缓存的逆变换
         if self.current_deformer_path is not None and self.current_deformer_path in self.inverse_deform_transforms:
@@ -591,7 +594,7 @@ class GaussianModel:
                     inv_transform
                 )
                 new_xyz = torch.as_tensor(new_xyz_canonical, dtype=torch.float, device="cuda")
-                print(f"[Densify Split] Applied cached inverse transform, new points: {new_xyz.shape[0]}")
+                # print(f"[Densify Split] Applied cached inverse transform, new points: {new_xyz.shape[0]}")
             except Exception as e:
                 print(f"[Warning] Inverse transform failed: {e}")
                 print(f"[Warning] Falling back to deformed space (may cause inconsistency)")
@@ -602,7 +605,7 @@ class GaussianModel:
             new_xyz = new_xyz_deformed
         
         # 其他属性直接从canonical空间复制
-        new_scaling = self.scaling_inverse_activation(self.get_scaling[selected_pts_mask].repeat(N,1) / (0.8*N))
+        new_scaling = self.scaling_inverse_activation(self.get_render_scaling[selected_pts_mask].repeat(N,1) / (0.8*N))
         new_rotation = self._rotation[selected_pts_mask].repeat(N,1)
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
@@ -617,7 +620,7 @@ class GaussianModel:
     def densify_and_clone(self, grads, grad_threshold, scene_extent):
         selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
-                                              torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
+                                              torch.max(self.get_render_scaling, dim=1).values <= self.percent_dense*scene_extent)
         
         # Clone操作直接从canonical空间复制，无需逆变换
         new_xyz = self._xyz[selected_pts_mask]
@@ -636,11 +639,11 @@ class GaussianModel:
 
         self.tmp_radii = radii
         
-        print(f"[Densify] Gaussian current: {self._xyz.shape[0]}")
+        # print(f"[Densify] Gaussian current: {self._xyz.shape[0]}")
         self.densify_and_clone(grads, max_grad, extent)
-        print(f"[Densify] Gaussian after clone: {self._xyz.shape[0]}")
+        # print(f"[Densify] Gaussian after clone: {self._xyz.shape[0]}")
         self.densify_and_split(grads, max_grad, extent)
-        print(f"[Densify] Gaussian after split: {self._xyz.shape[0]}")
+        # print(f"[Densify] Gaussian after split: {self._xyz.shape[0]}")
         
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
@@ -648,7 +651,7 @@ class GaussianModel:
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
         self.prune_points(prune_mask)
-        print(f"[Densify] Gaussian after prune: {self._xyz.shape[0]}")
+        # print(f"[Densify] Gaussian after prune: {self._xyz.shape[0]}")
 
         tmp_radii = self.tmp_radii
         self.tmp_radii = None
@@ -667,6 +670,7 @@ class GaussianModel:
     def update_deformed_gaussians(self, deformer_path, t):
         # 记录当前使用的deformer_path，用于densify时的逆变换
         self.current_deformer_path = deformer_path
+        self.current_timecode=t
         
         time = torch.tensor(t).to(self._xyz.device).repeat(self._xyz.shape[0], 1)
         temp_xyz, temp_rot, temp_deformer = self.get_deformed_gaussians(deformer_path)
@@ -676,8 +680,29 @@ class GaussianModel:
         self.deformed_xyz = temp_xyz + dx
         self.deformed_scl = self._scaling + ds
         self.deformed_rot = rotation_6d_to_quaternion(temp_rot + dr)
-        self.deformed_opa = self._opacity + do
-        self.deformed_shs = self.get_features + dshs
+
+        # self.deformed_rot=quat_multiply(rotation_6d_to_quaternion(temp_rot),rotation_6d_to_quaternion(dr))
+
+        self.deformed_opa = self._opacity #+ do
+        self.deformed_shs = self.get_features #+ dshs
+    
+    def update_deformed_gaussians_for_render(self):
+        time = torch.tensor(self.current_timecode).to(self._xyz.device).repeat(self._xyz.shape[0], 1)
+        temp_xyz, temp_rot, temp_deformer = self.get_deformed_gaussians(self.current_deformer_path)
+        
+        dx, ds, dr, do, dshs = self._deformation(self._xyz.detach(), temp_deformer, time.detach())
+        
+        self.deformed_xyz = temp_xyz + dx
+        self.deformed_scl = self._scaling.detach() + ds
+        self.deformed_rot = rotation_6d_to_quaternion(temp_rot + dr)
+        
+        self.deformed_opa = self._opacity.detach() #+ do
+        
+        if self.args.no_dshs:
+            self.deformed_shs=self.get_features.detach()
+        else:
+            self.deformed_shs = self.get_features.detach() + dshs
+    
     
     def update_deformed_gaussians_step2(self, deformer_path, t):
         self.current_deformer_path = None  # step2不使用变形

@@ -169,7 +169,7 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
 
 
                 #保存缓冲
-                if iteration % 500 == 1:
+                if iteration % 200 == 1:
                     image_to_save =image.permute(1, 2, 0).detach().cpu().numpy()
                     # image_to_save = torch.clamp(image_to_save, 0, 1)
                     try:
@@ -232,7 +232,7 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                     # training_report(tb_writer, global_iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background, 1., SPARSE_ADAM_AVAILABLE, None, dataset.train_test_exp), dataset.train_test_exp)
                     
                     # Densification
-                    if global_iteration < opt.densify_until_iter:
+                    if global_iteration < opt.densify_until_iter and gaussians.get_xyz.shape[0]<150000:
                         # Keep track of max radii in image-space for pruning
                         gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter], radii[visibility_filter])
                         gaussians.add_densification_stats(viewspace_point_tensor, visibility_filter)
@@ -293,7 +293,7 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
 
                     # print(f'G {time.time()-st}')
             
-            gaussians.update_deformed_gaussians(viewpoint_cam.deformer_path,viewpoint_cam.timecode)
+            gaussians.update_deformed_gaussians_for_render()
             scene.save(global_iteration+viewpoint_cam.kid)
             scene.clearCameras(dataset.rscale)
             torch.save((gaussians.capture(), global_iteration), scene.model_path + "/chkpnt" + str(global_iteration) + ".pth")
