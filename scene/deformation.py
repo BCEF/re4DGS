@@ -37,7 +37,17 @@ def quat_multiply(q1, q2):
     z = w1*z2 + x1*y2 - y1*x2 + z1*w2
     return torch.stack([w, x, y, z], dim=-1)
 
+def quatProduct_batch(q1, q2):
+    r1 = q1[:,0] # [B]
+    r2 = q2[:,0]
+    v1 = torch.stack((q1[:,1], q1[:,2], q1[:,3]), dim=-1) #[B,3]
+    v2 = torch.stack((q2[:,1], q2[:,2], q2[:,3]), dim=-1)
 
+    r = r1 * r2 - torch.sum(v1*v2, dim=1) # [B]
+    v = r1.unsqueeze(1) * v2 + r2.unsqueeze(1) * v1 + torch.linalg.cross(v1, v2) #[B,3]
+    q = torch.stack((r, v[:,0], v[:,1], v[:,2]), dim=1)
+
+    return q
 
 class Deformation(nn.Module):
     def __init__(self, D=8, W=256, input_ch=27, input_ch_time=9):
@@ -161,14 +171,11 @@ class Deformation(nn.Module):
                 last.bias.data = torch.tensor([1.0, 0.0, 0.0, 0.0])
 
             init_head(self.pos_deform,    mode="residual")
-            init_head(self.scales_deform, mode="absolute_vec")
+            # init_head(self.scales_deform, mode="absolute_vec")
+            init_head(self.scales_deform, mode="residual")
             init_head(self.rotations_deform, mode="6d_rotation")  # ← 只改这个
             init_head(self.opacity_deform, mode="residual")
             init_head(self.shs_deform,    mode="residual")
-
-
-
-
 
     # 进行hexplane查询
     def query_time(self, rays_pts_emb, deformer,time_emb):
