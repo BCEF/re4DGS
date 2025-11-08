@@ -843,7 +843,7 @@ class GaussianModel:
         # 最终不透明度 = 空间不透明度 × 时间mask
         # 在logit空间：logit(p1 * p2) = logit(p1) + log(p2)
         # 为了数值稳定，添加小的epsilon
-        self.deformed_opa = base_opacity_logit #+ torch.log(time_mask + 1e-8)
+        self.deformed_opa = base_opacity_logit + torch.log(time_mask + 1e-8)
 
         if self.args.no_dshs:
             self.deformed_shs=self.get_features
