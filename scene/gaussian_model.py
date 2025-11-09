@@ -669,8 +669,8 @@ class GaussianModel:
     # ✅ 新增：统一的更新和清理函数
     def _update_base_and_clear_cache(self):
         """更新base_xyz/base_quat并清空所有变形缓存"""
-        # self.base_xyz = self._xyz.detach().clone()
-        # self.base_quat = self._rotation.detach().clone()
+        self.base_xyz = self._xyz.detach().clone()
+        self.base_quat = self._rotation.detach().clone()
         
         # 清空所有缓存
         self._clear_all_caches()
@@ -690,7 +690,7 @@ class GaussianModel:
         stds = self.get_render_scaling[selected_pts_mask].repeat(N,1)
         means = torch.zeros((stds.size(0), 3), device="cuda")
         samples = torch.normal(mean=means, std=stds)
-        rots = build_rotation(self._rotation[selected_pts_mask]).repeat(N,1,1)
+        rots = build_rotation(self.get_render_rotation[selected_pts_mask]).repeat(N,1,1)
         new_xyz_deformed = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_render_xyz[selected_pts_mask].repeat(N, 1)
         
         # ✅ 关键修改：使用已缓存的逆变换
