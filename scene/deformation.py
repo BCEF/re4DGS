@@ -79,7 +79,7 @@ class Deformation(nn.Module):
     # 创建变形的神经网络   
     def create_net(self): 
         
-        grid_out_dim = self.grid.feat_dim#+8*5
+        grid_out_dim = self.grid.feat_dim
         
     
         # 创建MLP网络
@@ -178,26 +178,24 @@ class Deformation(nn.Module):
             init_head(self.shs_deform,    mode="residual")
 
     # 进行hexplane查询
-    def query_time(self, rays_pts_emb, deformer,time_emb):
+    def query_time(self, rays_pts_emb,time_emb):
         grid_feature = self.grid(rays_pts_emb[:,:3], time_emb[:,:1])
         
-        # grid_feature=torch.cat((grid_feature,deformer),dim=-1)
-
         hidden = self.feature_out(grid_feature)   
         return hidden
      
     
-    def forward(self, rays_pts_emb, deformer=None,time_emb=None):
-        return self.forward_dynamic(rays_pts_emb, deformer,time_emb)
+    def forward(self, rays_pts_emb, time_emb=None):
+        return self.forward_dynamic(rays_pts_emb,time_emb)
 
     def forward_static(self, rays_pts_emb):
         grid_feature = self.grid(rays_pts_emb[:,:3])
         dx = self.static_mlp(grid_feature)
         return rays_pts_emb[:, :3] + dx
     
-    def forward_dynamic(self,pts_emb, deformer, time_emb):
+    def forward_dynamic(self,pts_emb, time_emb):
 
-        hidden = self.query_time(pts_emb, deformer,time_emb)
+        hidden = self.query_time(pts_emb,time_emb)
 
         # breakpoint()
         dx = self.pos_deform(hidden)

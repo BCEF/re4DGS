@@ -30,6 +30,7 @@ except:
 
 #SUMO
 from deformation_tool import DeformationGraph,DeformationTransforms,apply_deformation_to_gaussians2,apply_deformation_to_gaussians_full
+from deformation_tool.transform_gaussian import apply_deformation_to_gaussians_torch_batched
 from scene.deformation import Deformation,quat_multiply
 from scene.rotation_utils import rotation_6d_to_quaternion,quaternion_to_rotation_6d
 
@@ -83,7 +84,6 @@ class GaussianModel:
         self.bg_image_dict={}
         self.deformed_gaussian_xyz={}
         self.deformed_gaussian_rot={}
-        self.vertex_deformer={}
         
         # ✅ 逆变换缓存
         self.inverse_deform_transforms={}
@@ -594,7 +594,8 @@ class GaussianModel:
         self._clear_all_caches()
         # self._update_base_and_clear_cache()
         self.update_deformed_gaussians_for_render()
-
+    
+    
     def cat_tensors_to_optimizer(self, tensors_dict):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:
@@ -650,10 +651,11 @@ class GaussianModel:
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
 
         # ✅ 更新base并清空缓存
-        # self._update_base_and_clear_cache()
+        
         self.base_xyz=torch.cat((self.base_xyz,new_xyz),dim=0)
         self.base_quat=torch.cat((self.base_quat,new_rotation),dim=0)
         self._clear_all_caches()
+        # self._update_base_and_clear_cache()
         self.update_deformed_gaussians_for_render()
 
     # ✅ 新增：清空所有缓存的统一方法
@@ -661,7 +663,6 @@ class GaussianModel:
         """清空所有变形相关的缓存"""
         self.deformed_gaussian_xyz.clear()
         self.deformed_gaussian_rot.clear()
-        self.vertex_deformer.clear()
         # self.inverse_deform_transforms.clear()
         # self.current_deformer_path = None
         # print(f"[Cache Clear] Cleared all deformation caches")
@@ -690,33 +691,37 @@ class GaussianModel:
         stds = self.get_render_scaling[selected_pts_mask].repeat(N,1)
         means = torch.zeros((stds.size(0), 3), device="cuda")
         samples = torch.normal(mean=means, std=stds)
-        rots = build_rotation(self.get_render_rotation[selected_pts_mask]).repeat(N,1,1)
-        new_xyz_deformed = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.get_render_xyz[selected_pts_mask].repeat(N, 1)
+        rots = build_rotation(self.deformed_rot[selected_pts_mask]).repeat(N,1,1)
+        new_xyz_deformed = torch.bmm(rots, samples.unsqueeze(-1)).squeeze(-1) + self.deformed_xyz[selected_pts_mask].repeat(N, 1)
         
-        # ✅ 关键修改：使用已缓存的逆变换
-        if self.current_deformer_path is not None and self.current_deformer_path in self.inverse_deform_transforms:
-            try:
-                inv_transform = self.inverse_deform_transforms[self.current_deformer_path]
-                new_xyz_canonical = apply_deformation_to_gaussians2(
-                    self.dg, 
-                    new_xyz_deformed.detach().cpu().numpy(), 
-                    inv_transform
-                )
-                new_xyz = torch.as_tensor(new_xyz_canonical, dtype=torch.float, device="cuda")
-                # print(f"[Densify Split] Applied cached inverse transform, new points: {new_xyz.shape[0]}")
-            except Exception as e:
-                # print(f"[Warning] Inverse transform failed: {e}")
-                # print(f"[Warning] Falling back to deformed space (may cause inconsistency)")
-                # new_xyz = new_xyz_deformed
-                raise ValueError(f"Inverse transform failed: {e}")
+        # # ✅ 关键修改：使用已缓存的逆变换
+        # if self.current_deformer_path is not None and self.current_deformer_path in self.inverse_deform_transforms:
+        #     try:
+        #         inv_transform = self.inverse_deform_transforms[self.current_deformer_path]
+        #         new_xyz_canonical = apply_deformation_to_gaussians2(
+        #             self.dg, 
+        #             new_xyz_deformed.detach().cpu().numpy(), 
+        #             inv_transform
+        #         )
+        #         new_xyz = torch.as_tensor(new_xyz_canonical, dtype=torch.float, device="cuda")
+        #         # print(f"[Densify Split] Applied cached inverse transform, new points: {new_xyz.shape[0]}")
+        #     except Exception as e:
+        #         # print(f"[Warning] Inverse transform failed: {e}")
+        #         # print(f"[Warning] Falling back to deformed space (may cause inconsistency)")
+        #         # new_xyz = new_xyz_deformed
+        #         raise ValueError(f"Inverse transform failed: {e}")
         # else:
         #     print(f"[Warning] No cached inverse transform available for {self.current_deformer_path}")
         #     print(f"[Warning] Using deformed xyz directly (may cause inconsistency)")
         #     new_xyz = new_xyz_deformed
+
+        #极限测试，无变形图模拟 TODO 恢复
+        new_xyz = new_xyz_deformed
+
         
         # 其他属性直接从canonical空间复制
         new_scaling = self.scaling_inverse_activation(self.get_render_scaling[selected_pts_mask].repeat(N,1) / (0.8*N))
-        new_rotation = self._rotation[selected_pts_mask].repeat(N,1)
+        new_rotation = self.deformed_rot[selected_pts_mask].repeat(N,1)
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N,1,1)
         new_features_rest = self._features_rest[selected_pts_mask].repeat(N,1,1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N,1)
@@ -739,12 +744,12 @@ class GaussianModel:
                                               torch.max(self.get_render_scaling, dim=1).values <= self.percent_dense*scene_extent)
         
         # Clone操作直接从canonical空间复制，无需逆变换
-        new_xyz = self._xyz[selected_pts_mask]
+        new_xyz = self.deformed_xyz[selected_pts_mask]
         new_features_dc = self._features_dc[selected_pts_mask]
         new_features_rest = self._features_rest[selected_pts_mask]
         new_opacities = self._opacity[selected_pts_mask]
-        new_scaling = self._scaling[selected_pts_mask]
-        new_rotation = self._rotation[selected_pts_mask]
+        new_scaling = self.deformed_scl[selected_pts_mask]
+        new_rotation = self.deformed_rot[selected_pts_mask]
         new_tmp_radii = self.tmp_radii[selected_pts_mask]
         
         # ✅ 新增：复制时间参数
@@ -760,18 +765,56 @@ class GaussianModel:
         grads[grads.isnan()] = 0.0
 
         self.tmp_radii = radii
-        
-        # print(f"[Densify] Gaussian current: {self._xyz.shape[0]}")
         self.densify_and_clone(grads, max_grad, extent)
-        # print(f"[Densify] Gaussian after clone: {self._xyz.shape[0]}")
         self.densify_and_split(grads, max_grad, extent)
-        # print(f"[Densify] Gaussian after split: {self._xyz.shape[0]}")
         
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
             big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+
+        min_time_duration=0.01
+        max_time_duration=3.5
+
+        time_center = self.get_time_center.squeeze()  # (N,)
+        time_duration = self.get_time_duration.squeeze()  # (N,)
+        
+        # 条件A: 时间中心超出有效范围 [0, 1]（允许小幅越界）
+        time_out_of_range = (time_center < -0.15) | (time_center > 1.15)
+        
+        # 条件B: 时间持续时间过短（几乎瞬时出现，可能是噪声）
+        time_too_short = time_duration < min_time_duration
+        
+        # 条件C: 时间持续时间过长（接近静态，可能是冗余点）
+        time_too_long = time_duration > max_time_duration
+        
+        # # 条件D: 峰值时间不透明度过低
+        # # 即使在最佳时刻 (t = time_center)，有效opacity也很低
+        # # 注意：在 t=time_center 时，temporal_mask=1，所以峰值opacity就是spatial opacity
+        # peak_opacity_too_low = self.get_opacity.squeeze() < min_opacity * 2
+        
+        # # 条件E（可选）: 时间覆盖检查 - 检查高斯点在关键时间点的可见性
+        # # 采样几个关键时间点，检查是否在任何时刻可见
+        # key_times = torch.tensor([0.0, 0.25, 0.5, 0.75, 1.0], 
+        #                         device=time_center.device, dtype=torch.float32)
+        # max_temporal_opacity = torch.zeros(time_center.shape[0], device=time_center.device)
+        
+        # for t in key_times:
+        #     time_diff = t - time_center
+        #     normalized_diff = time_diff / time_duration
+        #     temporal_mask = torch.exp(-0.5 * normalized_diff ** 2)
+        #     effective_opacity = self.get_opacity.squeeze() * temporal_mask
+        #     max_temporal_opacity = torch.maximum(max_temporal_opacity, effective_opacity)
+        
+        # never_visible = max_temporal_opacity < min_opacity * 0.5
+        
+        # 合并所有时间相关的剪枝条件
+        time_prune_mask = time_out_of_range | time_too_short | time_too_long 
+        
+        # 3. 综合所有剪枝条件
+        prune_mask = torch.logical_or(prune_mask, time_prune_mask)
+
         self.prune_points(prune_mask)
         print(f"[Densify] Gaussian after prune: {self._xyz.shape[0]}")
 
@@ -831,9 +874,9 @@ class GaussianModel:
         self.current_timecode=t
         
         time = torch.tensor(t).to(self._xyz.device).repeat(self._xyz.shape[0], 1)
-        temp_xyz, temp_rot, temp_deformer = self.get_deformed_gaussians(deformer_path)
+        temp_xyz, temp_rot = self.get_deformed_gaussians(deformer_path)
         
-        dx, ds, dr, do, dshs = self._deformation(self._xyz, temp_deformer, time)
+        dx, ds, dr, do, dshs = self._deformation(self._xyz, time)
         
         self.deformed_xyz = temp_xyz + dx
         self.deformed_scl = self._scaling + ds
@@ -853,7 +896,7 @@ class GaussianModel:
         # 在logit空间：logit(p1 * p2) = logit(p1) + log(p2)
         # 为了数值稳定，添加小的epsilon
         self.deformed_opa = base_opacity_logit + torch.log(time_mask + 1e-8)
-
+        
         if self.args.no_dshs:
             self.deformed_shs=self.get_features
         else:
@@ -868,9 +911,9 @@ class GaussianModel:
 
         
         time = torch.tensor(self.current_timecode).to(self._xyz.device).repeat(self._xyz.shape[0], 1)
-        temp_xyz, temp_rot, temp_deformer = self.get_deformed_gaussians(self.current_deformer_path)
+        temp_xyz, temp_rot = self.get_deformed_gaussians(self.current_deformer_path)
         
-        dx, ds, dr, do, dshs = self._deformation(self._xyz.detach(), temp_deformer, time.detach())
+        dx, ds, dr, do, dshs = self._deformation(self._xyz.detach(), time.detach())
         
         self.deformed_xyz = temp_xyz + dx.detach()
         self.deformed_scl = self._scaling.detach() + ds.detach()
@@ -890,25 +933,13 @@ class GaussianModel:
         # 在logit空间：logit(p1 * p2) = logit(p1) + log(p2)
         # 为了数值稳定，添加小的epsilon
         self.deformed_opa = base_opacity_logit + torch.log(time_mask + 1e-8)
-        
+
         if self.args.no_dshs:
             self.deformed_shs=self.get_features.detach()
         else:
             self.deformed_shs = self.get_features.detach() + dshs.detach()
     
     
-    def update_deformed_gaussians_step2(self, deformer_path, t):
-        self.current_deformer_path = None  # step2不使用变形
-        self.deformed_xyz = self._xyz
-        self.deformed_scl = self._scaling
-        self.deformed_rot = self._rotation
-        
-        # ✅ step2 也需要应用时间调制
-        time_mask = self.compute_temporal_opacity(t)
-        self.deformed_opa = self._opacity + torch.log(time_mask + 1e-8)
-        
-        self.deformed_shs = self.get_features
-
     def deform_init(self, dg_path):
         self.dg_path = dg_path
         self.dg = DeformationGraph()
@@ -925,33 +956,23 @@ class GaussianModel:
             # 加载正向变换
             transforms = DeformationTransforms()
             transforms.load(deformer_path)
-            
-            batch_size = self._xyz.shape[0]
-            result = get_deformation_info_fixed_influences(
-                self.dg, 
-                self.base_xyz.detach().cpu().clone().numpy(), 
-                transforms, 
-                self.influ_nums, 
-                'inverse_distance'
-            )
-            weights = torch.as_tensor(np.array(result['weights']), dtype=torch.float32).to('cuda')
-            RT = torch.as_tensor(np.array(result['RT']), dtype=torch.float32).to('cpu')
-            quaternions, translations = build_quaternion(RT[..., :3, :3]), RT[..., :3, 3]
-            self.vertex_deformer[deformer_path] = torch.cat([
-                weights.view(batch_size, -1), 
-                quaternions.to('cuda').view(batch_size, -1), 
-                translations.to('cuda').reshape(batch_size, -1)
-            ], dim=-1)
 
-            input_gs = {"xyz": self.base_xyz.cpu().numpy(), "rotations": self.base_quat.cpu().numpy()}
-            deformed_gaussian = apply_deformation_to_gaussians_full(self.dg, input_gs, transforms)
-            deformed_points = torch.as_tensor(deformed_gaussian["xyz"]).to(self._xyz.device)
-            deformed_rots = torch.as_tensor(deformed_gaussian["rotations"]).to(self._xyz.device)
-            deformed_rots = quaternion_to_rotation_6d(deformed_rots)
+            #变形图
+            # input_gs = {"xyz": self.base_xyz.cpu().numpy(), "rotations": self.base_quat.cpu().numpy()}
+            # deformed_gaussian = apply_deformation_to_gaussians_full(self.dg, input_gs, transforms)
+            # deformed_points = torch.as_tensor(deformed_gaussian["xyz"]).to(self._xyz.device)
+            # deformed_rots = torch.as_tensor(deformed_gaussian["rotations"]).to(self._xyz.device)
+            # deformed_rots = quaternion_to_rotation_6d(deformed_rots)
+
+
+            # self.deformed_gaussian_xyz[deformer_path] = deformed_points
+            # self.deformed_gaussian_rot[deformer_path] = deformed_rots
+
+            #极限测试，无变形图模拟 TODO 恢复
+            self.deformed_gaussian_xyz[deformer_path] = self.base_xyz
+            self.deformed_gaussian_rot[deformer_path] = quaternion_to_rotation_6d(self.base_quat)
             
-            self.deformed_gaussian_xyz[deformer_path] = deformed_points
-            self.deformed_gaussian_rot[deformer_path] = deformed_rots
-            
+
             # ✅ 关键修改：同时加载并缓存逆变换
             inv_trans_path = os.path.join(
                 os.path.dirname(deformer_path), 
@@ -962,12 +983,13 @@ class GaussianModel:
                 inv_transform = DeformationTransforms()
                 inv_transform.load(inv_trans_path)
                 self.inverse_deform_transforms[deformer_path] = inv_transform
-                print(f"[Deformation Cache] Cached forward & inverse transform for: {deformer_path}")
+                # print(f"[Deformation Cache] Cached forward & inverse transform for: {deformer_path}")
             else:
                 print(f"[Warning] Inverse transform not found: {inv_trans_path}")
                 print(f"[Warning] Densification may cause inconsistency for this frame")
-            
-        return self.deformed_gaussian_xyz[deformer_path], self.deformed_gaussian_rot[deformer_path], self.vertex_deformer[deformer_path]
+        
+        return self._xyz, quaternion_to_rotation_6d(self._rotation)
+        return self.deformed_gaussian_xyz[deformer_path], self.deformed_gaussian_rot[deformer_path]
     
     def compute_deformed_gaussian(self, deformer_path):
         transforms = DeformationTransforms()

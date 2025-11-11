@@ -399,6 +399,140 @@ def apply_deformation_to_gaussians_full(dg, gaussian, transforms):
     
     return deformed_gaussian
 
+import torch
+import torch.nn.functional as F
+from pytorch3d.transforms import quaternion_multiply, quaternion_apply, matrix_to_quaternion
+
+def apply_deformation_to_gaussians_torch(dg, xyz, rotations, transforms, device='cuda'):
+    """
+    PyTorch可微分版本的变形图变换
+    
+    参数:
+        dg: 变形图对象
+        xyz: [N, 3] 高斯点位置 (torch.Tensor)
+        rotations: [N, 4] 四元数旋转 (w,x,y,z格式) (torch.Tensor)
+        transforms: [M, 4, 4] 变换矩阵 (torch.Tensor)
+        device: 计算设备
+    
+    返回:
+        deformed_xyz: [N, 3] 变形后的位置
+        deformed_rotations: [N, 4] 变形后的旋转
+    """
+    
+    # 确保所有数据在正确设备上
+    xyz = xyz.to(device)
+    rotations = rotations.to(device)
+    
+    # 从dg获取节点信息并转为torch
+    node_positions = torch.from_numpy(dg.node_positions).float().to(device)  # [M, 3]
+    influence_radius = dg.node_radius
+    transforms = torch.from_numpy(transforms.transformations).float().to(device)  # [M, 4, 4]
+    
+    N = xyz.shape[0]  # 高斯点数量
+    M = node_positions.shape[0]  # 节点数量
+    
+    # 1. 计算每个点到所有节点的距离
+    # xyz: [N, 3] -> [N, 1, 3]
+    # node_positions: [M, 3] -> [1, M, 3]
+    distances = torch.norm(
+        xyz.unsqueeze(1) - node_positions.unsqueeze(0), 
+        dim=2
+    )  # [N, M]
+    
+    # 2. 计算权重 (在影响半径内的节点)
+    weights = torch.clamp(1.0 - distances / influence_radius, min=0.0)  # [N, M]
+    
+    # 归一化权重
+    weight_sum = weights.sum(dim=1, keepdim=True)  # [N, 1]
+    weights = weights / (weight_sum + 1e-8)  # 避免除零
+    
+    # 对于没有任何影响节点的点，权重全为0，这些点保持不变
+    has_influence = (weight_sum.squeeze() > 0)  # [N]
+    
+    # 3. 位置变换 - 使用加权混合
+    # 将xyz转为齐次坐标
+    xyz_homo = torch.cat([xyz, torch.ones(N, 1, device=device)], dim=1)  # [N, 4]
+    
+    # 对每个节点的变换矩阵进行加权混合
+    # transforms: [M, 4, 4], weights: [N, M]
+    # 方法：xyz_homo @ transforms^T，然后加权求和
+    
+    transformed_positions = torch.zeros(N, 3, device=device)
+    for i in range(M):
+        # 对第i个节点的变换
+        transformed = torch.matmul(transforms[i], xyz_homo.T).T  # [N, 4]
+        transformed_positions += weights[:, i:i+1] * transformed[:, :3]
+    
+    # 4. 旋转变换 - 使用最大权重节点的旋转
+    max_weight_indices = torch.argmax(weights, dim=1)  # [N]
+    
+    # 提取每个节点的旋转矩阵
+    rotation_matrices = transforms[:, :3, :3]  # [M, 3, 3]
+    
+    # 对每个点，获取其最大权重节点的旋转
+    selected_rotations = rotation_matrices[max_weight_indices]  # [N, 3, 3]
+    
+    # 正交化旋转矩阵 (SVD)
+    U, S, Vh = torch.linalg.svd(selected_rotations)
+    orthogonal_R = torch.matmul(U, Vh)  # [N, 3, 3]
+    
+    # 将旋转矩阵转为四元数
+    deform_quats = matrix_to_quaternion(orthogonal_R)  # [N, 4] (w,x,y,z)
+    
+    # 组合原始旋转和变形旋转
+    # PyTorch3D的四元数格式是 (w,x,y,z)，与你的格式一致
+    deformed_rotations = quaternion_multiply(deform_quats, rotations)
+    
+    # 归一化四元数
+    deformed_rotations = F.normalize(deformed_rotations, p=2, dim=1)
+    
+    # 5. 对没有影响的点，保持原始值
+    deformed_xyz = torch.where(
+        has_influence.unsqueeze(1).expand(-1, 3),
+        transformed_positions,
+        xyz
+    )
+    
+    deformed_rotations = torch.where(
+        has_influence.unsqueeze(1).expand(-1, 4),
+        deformed_rotations,
+        rotations
+    )
+    
+    return deformed_xyz, deformed_rotations
+
+def apply_deformation_to_gaussians_torch_batched(dg, xyz, rotations, transforms, 
+                                                  batch_size=20000, device='cuda'):
+    """
+    批处理版本，节省内存
+    """
+    N = xyz.shape[0]
+    num_batches = (N + batch_size - 1) // batch_size
+    
+    deformed_xyz_list = []
+    deformed_rot_list = []
+    
+    node_positions = torch.from_numpy(dg.node_positions).float().to(device)
+    influence_radius = dg.node_radius
+    transforms_tensor = torch.from_numpy(transforms.transformations).float().to(device)
+    
+    for i in range(num_batches):
+        start_idx = i * batch_size
+        end_idx = min(start_idx + batch_size, N)
+        
+        batch_xyz = xyz[start_idx:end_idx]
+        batch_rot = rotations[start_idx:end_idx]
+        
+        # 调用单批次处理
+        batch_def_xyz, batch_def_rot = apply_deformation_to_gaussians_torch(
+            dg, batch_xyz, batch_rot, transforms_tensor, device
+        )
+        
+        deformed_xyz_list.append(batch_def_xyz)
+        deformed_rot_list.append(batch_def_rot)
+    
+    return torch.cat(deformed_xyz_list, dim=0), torch.cat(deformed_rot_list, dim=0)
+
 class GaussianDeformer:
     """高斯点云变形工具"""
     

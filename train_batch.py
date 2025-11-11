@@ -174,9 +174,13 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                     # image_to_save = torch.clamp(image_to_save, 0, 1)
                     try:
                         os.makedirs(f"{dataset.model_path}/render_image/",exist_ok=True)
-                        plt.imsave(f"{dataset.model_path}/render_image/rendered-image_{iteration-1}_{viewpoint_cam.image_name}.png", image_to_save)
+                        plt.imsave(f"{dataset.model_path}/render_image/rendered-image_{iteration-1}_{gaussians.current_timecode}_{viewpoint_cam.image_name}", image_to_save)
                     except Exception as e:
                         print(e)
+                
+                # #更新base
+                if iteration % 10 == 1:
+                    gaussians._update_base_and_clear_cache()
 
                 if viewpoint_cam.alpha_mask is not None:
                     alpha_mask = viewpoint_cam.alpha_mask.cuda()
@@ -240,27 +244,6 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                         if global_iteration > opt.densify_from_iter and global_iteration % opt.densification_interval == 0:# and gaussians.get_xyz.shape[0]<360000:
                             size_threshold = 20 if global_iteration > opt.opacity_reset_interval else None
                             gaussians.densify_and_prune(opt.densify_grad_threshold, 0.005, scene.cameras_extent, size_threshold, radii)
-
-                            # current_point_count = gaussians._xyz.shape[0]
-                            # if hasattr(gaussians, 'vertex_deformer') and gaussians.vertex_deformer:
-                            #     keys_to_remove = []
-                            #     for cached_kid, cached_data in gaussians.vertex_deformer.items():
-                            #         # 检查缓存的点数是否与当前点数匹配
-                            #         # cached_data.shape[0] 是旧的点数，current_point_count 是新的点数
-                            #         if cached_data.shape[0] != current_point_count:
-                            #             keys_to_remove.append(cached_kid)
-                                
-                            #     if keys_to_remove:
-                            #         print(f'  🔧 清理{len(keys_to_remove)}个不匹配的变形缓存（稠密化后点数变化）')
-                            #         for kid_to_remove in keys_to_remove:
-                            #             if kid_to_remove in gaussians.vertex_deformer:
-                            #                 del gaussians.vertex_deformer[kid_to_remove]
-                            #             if hasattr(gaussians, 'deformed_gaussian_xyz') and kid_to_remove in gaussians.deformed_gaussian_xyz:
-                            #                 del gaussians.deformed_gaussian_xyz[kid_to_remove]
-                            #             if hasattr(gaussians, 'deformed_gaussian_rot') and kid_to_remove in gaussians.deformed_gaussian_rot:
-                            #                 del gaussians.deformed_gaussian_rot[kid_to_remove]
-                            #         print(f'  ✅ 缓存已清理，将在下次使用时重建（只重建一次）')
-
                             print(f"Gaussian splatting points: {gaussians._xyz.shape[0]}")
                         
                         if global_iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and global_iteration == opt.densify_from_iter):
