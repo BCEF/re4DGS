@@ -179,8 +179,7 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                         print(e)
                 
                 # #更新base
-                if iteration % 10 == 1:
-                    gaussians._update_base_and_clear_cache()
+
 
                 if viewpoint_cam.alpha_mask is not None:
                     alpha_mask = viewpoint_cam.alpha_mask.cuda()
@@ -248,6 +247,14 @@ def training(dataset, hyper,opt, pipe, saving_iterations, checkpoint_iterations,
                         
                         if global_iteration % opt.opacity_reset_interval == 0 or (dataset.white_background and global_iteration == opt.densify_from_iter):
                             gaussians.reset_opacity()
+                    
+                    if global_iteration > opt.densify_until_iter:
+                        gaussians._xyz.requires_grad = False
+                        gaussians._rotation.requires_grad = False
+                        if gaussians._xyz.grad is not None:
+                            gaussians._xyz.grad.zero_()
+                        if gaussians._rotation.grad is not None:
+                            gaussians._rotation.grad.zero_()
                     
 
 

@@ -2,6 +2,9 @@ import numpy as np
 from plyfile import PlyData, PlyElement
 from .deformation_graph import DeformationGraph
 import json
+import torch
+import torch.nn.functional as F
+from pytorch3d.transforms import quaternion_multiply, matrix_to_quaternion
 
 def apply_deformation_to_gaussians(dg, gaussian, transforms):
     """
@@ -399,10 +402,6 @@ def apply_deformation_to_gaussians_full(dg, gaussian, transforms):
     
     return deformed_gaussian
 
-import torch
-import torch.nn.functional as F
-from pytorch3d.transforms import quaternion_multiply, quaternion_apply, matrix_to_quaternion
-
 def apply_deformation_to_gaussians_torch(dg, xyz, rotations, transforms, device='cuda'):
     """
     PyTorch可微分版本的变形图变换
@@ -426,7 +425,6 @@ def apply_deformation_to_gaussians_torch(dg, xyz, rotations, transforms, device=
     # 从dg获取节点信息并转为torch
     node_positions = torch.from_numpy(dg.node_positions).float().to(device)  # [M, 3]
     influence_radius = dg.node_radius
-    transforms = torch.from_numpy(transforms.transformations).float().to(device)  # [M, 4, 4]
     
     N = xyz.shape[0]  # 高斯点数量
     M = node_positions.shape[0]  # 节点数量
@@ -514,7 +512,7 @@ def apply_deformation_to_gaussians_torch_batched(dg, xyz, rotations, transforms,
     
     node_positions = torch.from_numpy(dg.node_positions).float().to(device)
     influence_radius = dg.node_radius
-    transforms_tensor = torch.from_numpy(transforms.transformations).float().to(device)
+    transforms_tensor = torch.from_numpy(np.array(transforms.transformations)).float().to(device)
     
     for i in range(num_batches):
         start_idx = i * batch_size
@@ -532,7 +530,6 @@ def apply_deformation_to_gaussians_torch_batched(dg, xyz, rotations, transforms,
         deformed_rot_list.append(batch_def_rot)
     
     return torch.cat(deformed_xyz_list, dim=0), torch.cat(deformed_rot_list, dim=0)
-
 class GaussianDeformer:
     """高斯点云变形工具"""
     
